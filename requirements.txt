@@ -1,0 +1,34 @@
+# ── AI English Essay Corrector — requirements ─────────────────────────────────
+# Python 3.10+  |  Windows 10  |  RTX 2080 Ti (CUDA 11.x)
+
+# ── Step 1: Install CUDA-enabled PyTorch FIRST (required for GPU EasyOCR) ─────
+# Run this BEFORE pip install -r requirements.txt:
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# Verify CUDA is working:
+#   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# Expected output:  True  NVIDIA GeForce RTX 2080 Ti
+#
+# If you installed regular torch (CPU-only) by mistake, uninstall first:
+#   pip uninstall torch torchvision torchaudio -y
+# Then re-run the cu118 install above.
+
+# ── Step 2: Install remaining dependencies ────────────────────────────────────
+PyMuPDF>=1.23.0        # fitz — PDF text extraction, rendering, shape drawing
+easyocr>=1.7.1         # GPU-accelerated OCR for scanned/handwritten pages
+Pillow>=10.0.0         # image handling (EasyOCR dependency)
+numpy>=1.24.0          # array ops (EasyOCR dependency)
+requests>=2.31.0       # HTTP client for Ollama REST API
+
+# ── Step 3: Install & run Ollama ──────────────────────────────────────────────
+# Download from: https://ollama.com/download  (Windows installer)
+# Then pull the model:
+#   ollama pull phi3
+# Start the server (runs in background):
+#   ollama serve
+# Verify it's working:
+#   curl http://localhost:11434/api/tags
+
+# ── Optional: faster JSON ─────────────────────────────────────────────────────
+# orjson>=3.9.0
