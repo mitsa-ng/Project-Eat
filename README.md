@@ -19,7 +19,7 @@ Project-EAT appears to be a Python application involving OCR, NLP, and a GUI int
    cd Project-EAT
    ```
 
-2. **Create a virtual environment** (strongly recommended):
+2. **Create a virtual environment** (optional):
    ```bash
    python -m venv venv
    ```
@@ -32,10 +32,6 @@ Project-EAT appears to be a Python application involving OCR, NLP, and a GUI int
    - **Windows (cmd.exe)**:
      ```cmd
      .\venv\Scripts\activate.bat
-     ```
-   - **macOS/Linux**:
-     ```bash
-     source venv/bin/activate
      ```
 
 4. **Install dependencies**:
@@ -51,9 +47,11 @@ Project-EAT appears to be a Python application involving OCR, NLP, and a GUI int
    ```bash
    python main.py
    ```
-
-3. Use the GUI or command-line prompts to interact with the OCR and NLP features.
-
+   or
+   ```bash
+   python gui.py
+   ```
+   
 ## Additional Notes
 
 - If you add new dependencies, update `requirements.txt` by running:
