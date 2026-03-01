@@ -7,6 +7,13 @@ Project-EAT appears to be a Python application involving OCR, NLP, and a GUI int
 ## Prerequisites
 
 - Ollama https://ollama.com/
+- phi3 model
+  ```bash
+   ollama pull phi3
+   ```
+  ```bash
+   ollama pull phi3:14b
+   ```
 - Python 3.8 or later
 - `pip` for installing dependencies
 - (Optional) A virtual environment tool such as `venv` or `virtualenv`
