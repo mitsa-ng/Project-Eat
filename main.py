@@ -21,6 +21,8 @@ from pathlib import Path
 from ocr_engine import OCREngine
 from nlp_engine  import NLPEngine
 from annotator   import Annotator
+from live_camera import LiveModeController
+from camera    import camera_selector
 
 logging.basicConfig(
     level   = logging.INFO,
@@ -46,6 +48,10 @@ def parse_args() -> argparse.Namespace:
                    help="Ollama model name (default: phi3)")
     p.add_argument("--ollama-url", default="http://localhost:11434/api/generate",
                    help="Ollama endpoint URL")
+    p.add_argument("--live", action="store_true",
+                   help="Enable live camera mode for real-time essay analysis")
+    p.add_argument("--camera", type=int, default=0,
+                   help="Camera device index for live mode (default: 0)")
     return p.parse_args()
 
 
@@ -124,4 +130,46 @@ def run_pipeline(args: argparse.Namespace) -> str:
 
 
 if __name__ == "__main__":
-    run_pipeline(parse_args())
+    args = parse_args()
+    if args.live:
+        run_live_mode(args)
+    else:
+        run_pipeline(args)
+
+
+def run_live_mode(args: argparse.Namespace) -> None:
+    """Run live camera mode for real-time essay analysis."""
+    t0 = time.time()
+    logger.info("━━━ Live Mode — Camera Detection ━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    selectors = camera_selector.CameraSelector.enumerate_devices()
+    if not selectors:
+        logger.error("No cameras found. Connect a camera and try again.")
+        sys.exit(1)
+
+    logger.info(f"Found {len(selectors)} camera(s):")
+    for d in selectors:
+        logger.info(f"  [{d['id']}] {d['name']} - {d['resolution']}")
+
+    cam_id = args.camera
+    if cam_id >= len(selectors):
+        logger.warning(f"Camera {cam_id} not available, using camera 0")
+        cam_id = 0
+
+    logger.info(f"Starting live analysis on camera {cam_id}...")
+    nlp = NLPEngine(model=args.model, ollama_url=args.ollama_url)
+
+    def on_results(ocr_words, errors):
+        n = sum(len(v) for v in ocr_words.values())
+        logger.info(f"  → {n} words, {len(errors)} errors")
+        for i, e in enumerate(errors[:3], 1):
+            logger.info(f"    {i}. [{e['type']:8s}] {e['original']!r} → {e['suggestion']!r}")
+
+    controller = LiveModeController(use_gpu=not args.no_gpu)
+    try:
+        controller.start(camera_id=cam_id, callback=on_results, nlp_engine=nlp)
+    except KeyboardInterrupt:
+        logger.info("\nInterrupted by user")
+    finally:
+        elapsed = time.time() - t0
+        logger.info(f"━━━ Live mode ended in {elapsed:.1f}s ━━━━━━━━━━━━━━━━━━━")

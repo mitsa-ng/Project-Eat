@@ -58,6 +58,38 @@ Project-EAT appears to be a Python application involving OCR, NLP, and a GUI int
    ```bash
    python gui.py
    ```
+
+### Live Camera Mode
+
+Project-EAT supports live camera mode for real-time essay document analysis:
+
+#### Requirements
+
+```bash
+pip install opencv-python-headless
+```
+
+#### CLI Usage
+
+```bash
+python main.py --live --camera 0
+```
+
+- `--live`: Enable live camera mode
+- `--camera N`: Select camera device (default: 0)
+- Use `--no-gpu` to force CPU processing
+
+Press `Ctrl+C` to stop live mode.
+
+#### GUI Usage
+
+Click the "📷 Live Mode" button in the GUI. Select your camera when prompted, then point at your essay document. The analysis results will stream in real-time.
+
+### Hardware Permissions
+
+- **macOS**: Grant camera access in System Preferences → Security & Privacy → Privacy → Camera
+- **Windows**: Allow camera access when prompted by the application
+- **Linux**: Add user to the `video` group: `sudo usermod -a -G video $USER`
    
 ## Additional Notes
 

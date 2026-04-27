@@ -104,6 +104,7 @@ class App(tk.Tk):
         self.minsize(780, 740)
 
         self._running    = False
+        self._live_running = False
         self._zip_path   = ""
         self._pdf_list   = []      # list of Path objects in selected folder
 
@@ -253,13 +254,19 @@ class App(tk.Tk):
             row=1, column=2, columnspan=2, sticky="w",
             padx=(0, 12), pady=(0, 8))
 
-        # ── run button + status ───────────────────────────────────────────────
+# ── run button + status ───────────────────────────────────────────────
         btn_row = ttk.Frame(main)
         btn_row.pack(fill="x", pady=(0, 10))
         self._run_btn = ttk.Button(btn_row, text="▶   Process Folder",
-                                    style="Accent.TButton",
-                                    command=self._on_run)
+                                     style="Accent.TButton",
+                                     command=self._on_run)
         self._run_btn.pack(side="left")
+        ttk.Button(btn_row, text="📷  Live Mode",
+                       command=self._on_live_mode).pack(side="left", padx=(8, 0))
+        self._stop_live_btn = ttk.Button(btn_row, text="⏹  Stop",
+                                        command=self._stop_live_mode,
+                                        state="disabled")
+        self._stop_live_btn.pack(side="left", padx=(8, 0))
         self._status_lbl = ttk.Label(btn_row, text="", style="Success.TLabel")
         self._status_lbl.pack(side="left", padx=16)
 
@@ -599,6 +606,134 @@ class App(tk.Tk):
         finally:
             self._running = False
             self.after(0, lambda: self._run_btn.config(state="normal"))
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+    def _on_live_mode(self):
+        if self._running:
+            messagebox.showwarning("Busy", "Processing in progress.")
+            return
+        if self._live_running:
+            messagebox.showwarning("Busy", "Live mode already running.")
+            return
+
+        try:
+            from camera import CameraSelector
+        except ImportError as e:
+            messagebox.showerror("Missing dependency",
+                          f"Install opencv-python-headless:\n{e}")
+            return
+
+        devices = CameraSelector.enumerate_devices()
+        if not devices:
+            messagebox.showwarning("No camera", "No cameras found.")
+            return
+
+        cam_id = 0
+        if len(devices) > 1:
+            choices = "\n".join(f"{d['id']}: {d['name']} ({d['resolution']})"
+                              for d in devices)
+            cam_id = self._ask_camera(choices, devices)
+            if cam_id is None:
+                return
+
+        self._run_live_mode(cam_id)
+
+    def _ask_camera(self, choices: str, devices: list) -> int | None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Select Camera")
+        dialog.geometry("300x200")
+        dialog.transient(self)
+
+        tk.Label(dialog, text="Select camera:",
+                font=("Segoe UI", 10)).pack(pady=8)
+
+        var = tk.IntVar(value=0)
+        for d in devices:
+            tk.Radiobutton(dialog, text=f"{d['name']} ({d['resolution']})",
+                        variable=var, value=d['id']).pack(anchor="w", padx=20)
+
+        def on_ok():
+            dialog.result = var.get()
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.result = None
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=8)
+        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="left", padx=4)
+
+        dialog.result = 0
+        dialog.grab_set()
+        self.wait_window(dialog)
+        return getattr(dialog, "result", 0)
+
+    def _run_live_mode(self, camera_id: int):
+        from live_camera import LiveModeController
+        from nlp_engine import NLPEngine
+
+        self._live_running = True
+        self._stop_live_btn.config(state="normal")
+        self._run_btn.config(state="disabled")
+        self._set_status("Live mode active... press Stop to exit", "Warn.TLabel")
+        self._log_text.configure(state="normal")
+        self._log_text.insert("end", f"Starting live mode on camera {camera_id}...\n")
+        self._log_text.see("end")
+        self._log_text.configure(state="disabled")
+
+        def on_results(ocr_words, errors):
+            n = sum(len(v) for v in ocr_words.values())
+            self._log_text.configure(state="normal")
+            self._log_text.insert("end",
+                f"  → {n} words, {len(errors)} errors\n")
+            for e in errors[:3]:
+                self._log_text.insert("end",
+                    f"     [{e['type']:8s}] {e['original']} → {e['suggestion']}\n")
+            self._log_text.see("end")
+            self._log_text.configure(state="disabled")
+
+        threading.Thread(
+            target=self._run_live_thread,
+            args=(camera_id, on_results),
+            daemon=True
+        ).start()
+
+    def _run_live_thread(self, camera_id: int, callback):
+        from live_camera import LiveModeController
+        from nlp_engine import NLPEngine
+
+        model = self._model_var.get().strip() or "phi3"
+        url = self._url_var.get().strip()
+        use_gpu = self._gpu_var.get()
+
+        nlp = NLPEngine(model=model, ollama_url=url)
+        controller = LiveModeController(use_gpu=use_gpu)
+
+        try:
+            controller.start(camera_id=camera_id, callback=callback, nlp_engine=nlp)
+        except Exception as e:
+            import traceback
+            self._log_text.configure(state="normal")
+            self._log_text.insert("end", f"Error: {e}\n")
+            self._log_text.see("end")
+            self._log_text.configure(state="disabled")
+        finally:
+            self._live_running = False
+            self.after(0, lambda: self._run_btn.config(state="normal"))
+            self.after(0, lambda: self._stop_live_btn.config(state="disabled"))
+            self._set_status("Live mode stopped", "Success.TLabel")
+
+    def _stop_live_mode(self):
+        """Stop live mode capture."""
+        self._live_running = False
+        self._stop_live_btn.config(state="disabled")
+        self._set_status("Stopping live mode...", "Warn.TLabel")
+        self._log_text.configure(state="normal")
+        self._log_text.insert("end", "\nStopping live mode...\n")
+        self._log_text.configure(state="disabled")
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

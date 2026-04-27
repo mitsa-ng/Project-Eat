@@ -1,0 +1,5 @@
+.spectra/
+.opencode/
+.agent/
+__pycache__/
+openspec/.vector-search.db*
