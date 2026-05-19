@@ -54,24 +54,31 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Colour palette (Catppuccin Mocha)
+# Colour palette
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BG      = "#1e1e2e"
-BG2     = "#2a2a3e"
-BG3     = "#313145"
-ACCENT  = "#7c6af7"
-ACCENT2 = "#5a4fd4"
-FG      = "#cdd6f4"
-FG2     = "#a6adc8"
-SUCCESS = "#a6e3a1"
-WARNING = "#f9e2af"
-ERROR_C = "#f38ba8"
-BORDER  = "#45475a"
+BG = "#10131a"
+SURFACE = "#171b24"
+SURFACE_2 = "#202633"
+SURFACE_3 = "#273040"
+ACCENT = "#4f8cff"
+ACCENT_HOVER = "#3d73d6"
+FG = "#edf2ff"
+FG_MUTED = "#aeb8cc"
+SUCCESS = "#7bd88f"
+WARNING = "#f6c768"
+ERROR_C = "#ff7d90"
+BORDER = "#354052"
+
+FONT_UI = ("Segoe UI", 10)
+FONT_SMALL = ("Segoe UI", 9)
+FONT_TITLE = ("Segoe UI", 16, "bold")
+FONT_SECTION = ("Segoe UI", 10, "bold")
+FONT_MONO = ("Consolas", 9)
 
 TYPE_COLORS = {
-    "spelling": "#f38ba8",
-    "grammar":  "#fab387",
-    "semantic": "#89b4fa",
+    "spelling": ERROR_C,
+    "grammar": WARNING,
+    "semantic": "#8ab4ff",
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -124,146 +131,177 @@ class App(tk.Tk):
         s = ttk.Style(self)
         s.theme_use("clam")
         s.configure(".",
-                     background=BG, foreground=FG,
-                     fieldbackground=BG3, bordercolor=BORDER,
-                     troughcolor=BG2, selectbackground=ACCENT,
-                     selectforeground=FG, font=("Segoe UI", 10))
-        s.configure("TFrame",  background=BG)
-        s.configure("TLabel",  background=BG, foreground=FG)
-        s.configure("TEntry",  fieldbackground=BG3, foreground=FG,
-                               insertcolor=FG, bordercolor=BORDER)
-        s.configure("TCheckbutton", background=BG, foreground=FG)
-        s.map("TCheckbutton", background=[("active", BG)])
+                    background=BG, foreground=FG,
+                    fieldbackground=SURFACE_3, bordercolor=BORDER,
+                    troughcolor=SURFACE_2, selectbackground=ACCENT,
+                    selectforeground="#ffffff", font=FONT_UI)
+        s.configure("TFrame", background=BG)
+        s.configure("Surface.TFrame", background=SURFACE)
+        s.configure("Toolbar.TFrame", background=SURFACE_2)
+        s.configure("TLabel", background=BG, foreground=FG, font=FONT_UI)
+        s.configure("Muted.TLabel", background=SURFACE, foreground=FG_MUTED,
+                    font=FONT_SMALL)
+        s.configure("Title.TLabel", background=SURFACE_2, foreground=FG,
+                    font=FONT_TITLE)
+        s.configure("Subtitle.TLabel", background=SURFACE_2,
+                    foreground=FG_MUTED, font=FONT_SMALL)
+        s.configure("TEntry", fieldbackground=SURFACE_3, foreground=FG,
+                    insertcolor=FG, bordercolor=BORDER, lightcolor=BORDER,
+                    darkcolor=BORDER, padding=(8, 5))
+        s.configure("TCheckbutton", background=SURFACE, foreground=FG,
+                    font=FONT_UI)
+        s.map("TCheckbutton",
+              background=[("active", SURFACE)],
+              foreground=[("disabled", FG_MUTED)])
+        s.configure("TRadiobutton", background=SURFACE, foreground=FG,
+                    font=FONT_UI)
+        s.map("TRadiobutton",
+              background=[("active", SURFACE)],
+              foreground=[("disabled", FG_MUTED)])
         s.configure("Accent.TButton",
-                     background=ACCENT, foreground="#ffffff",
-                     borderwidth=0, focuscolor=ACCENT,
-                     font=("Segoe UI", 11, "bold"), padding=(16, 8))
+                    background=ACCENT, foreground="#ffffff",
+                    borderwidth=0, focuscolor=ACCENT,
+                    font=("Segoe UI", 11, "bold"), padding=(18, 9))
         s.map("Accent.TButton",
-              background=[("active", ACCENT2), ("disabled", BORDER)])
+              background=[("active", ACCENT_HOVER), ("disabled", BORDER)],
+              foreground=[("disabled", FG_MUTED)])
+        s.configure("Secondary.TButton",
+                    background=SURFACE_2, foreground=FG,
+                    borderwidth=1, bordercolor=BORDER,
+                    font=FONT_UI, padding=(12, 8))
+        s.map("Secondary.TButton",
+              background=[("active", SURFACE_3), ("disabled", SURFACE)],
+              foreground=[("disabled", FG_MUTED)])
+        s.configure("Danger.TButton",
+                    background=SURFACE_2, foreground=ERROR_C,
+                    borderwidth=1, bordercolor=BORDER,
+                    font=FONT_UI, padding=(12, 8))
+        s.map("Danger.TButton",
+              background=[("active", SURFACE_3), ("disabled", SURFACE)],
+              foreground=[("disabled", FG_MUTED)])
         s.configure("TButton",
-                     background=BG2, foreground=FG,
-                     borderwidth=1, bordercolor=BORDER,
-                     font=("Segoe UI", 10), padding=(8, 5))
-        s.map("TButton", background=[("active", BG3)])
+                    background=SURFACE_2, foreground=FG,
+                    borderwidth=1, bordercolor=BORDER,
+                    font=FONT_UI, padding=(10, 6))
+        s.map("TButton", background=[("active", SURFACE_3)])
         s.configure("Accent.Horizontal.TProgressbar",
-                     troughcolor=BG3, background=ACCENT,
-                     borderwidth=0, thickness=8)
+                    troughcolor=SURFACE_3, background=ACCENT,
+                    borderwidth=0, thickness=10)
         s.configure("Sub.Horizontal.TProgressbar",
-                     troughcolor=BG3, background=ACCENT2,
-                     borderwidth=0, thickness=6)
+                    troughcolor=SURFACE_3, background=ACCENT_HOVER,
+                    borderwidth=0, thickness=7)
         s.configure("Treeview",
-                     background=BG3, foreground=FG,
-                     fieldbackground=BG3, borderwidth=0,
-                     rowheight=24, font=("Segoe UI", 10))
+                    background=SURFACE_3, foreground=FG,
+                    fieldbackground=SURFACE_3, borderwidth=0,
+                    rowheight=28, font=FONT_UI)
         s.configure("Treeview.Heading",
-                     background=BG2, foreground=FG2,
-                     borderwidth=0, font=("Segoe UI", 10, "bold"))
+                    background=SURFACE_2, foreground=FG_MUTED,
+                    borderwidth=0, font=FONT_SECTION)
         s.map("Treeview",
               background=[("selected", ACCENT)],
               foreground=[("selected", "#ffffff")])
         s.configure("Success.TLabel", background=BG,
-                     foreground=SUCCESS, font=("Segoe UI", 10))
-        s.configure("Warn.TLabel",    background=BG,
-                     foreground=WARNING, font=("Segoe UI", 10))
-        s.configure("Error.TLabel",   background=BG,
-                     foreground=ERROR_C, font=("Segoe UI", 10))
+                    foreground=SUCCESS, font=FONT_UI)
+        s.configure("Warn.TLabel", background=BG,
+                    foreground=WARNING, font=FONT_UI)
+        s.configure("Error.TLabel", background=BG,
+                    foreground=ERROR_C, font=FONT_UI)
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # header
-        hdr = tk.Frame(self, bg=BG2, height=52)
+        hdr = ttk.Frame(self, style="Toolbar.TFrame", padding=(18, 14))
         hdr.pack(fill="x")
-        tk.Label(hdr, text="🎓  AI English Essay Corrector — Batch Mode",
-                 bg=BG2, fg=FG, font=("Segoe UI", 13, "bold")).pack(
-            side="left", padx=16, pady=12)
-        tk.Label(hdr, text="PyMuPDF · EasyOCR · Phi-3",
-                 bg=BG2, fg=FG2, font=("Segoe UI", 9)).pack(
-            side="right", padx=16)
+
+        title_block = ttk.Frame(hdr, style="Toolbar.TFrame")
+        title_block.pack(side="left", fill="x", expand=True)
+        ttk.Label(title_block, text="AI English Essay Corrector",
+                  style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            title_block,
+            text="Batch PDF correction with OCR, Phi-3 analysis, and annotated ZIP export",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(3, 0))
+
+        ttk.Label(hdr, text="PyMuPDF / EasyOCR / Ollama",
+                  background=SURFACE_2, foreground=FG_MUTED,
+                  font=FONT_SMALL).pack(side="right")
         tk.Frame(self, bg=ACCENT, height=2).pack(fill="x")
 
         main = ttk.Frame(self)
-        main.pack(fill="both", expand=True, padx=16, pady=10)
+        main.pack(fill="both", expand=True, padx=18, pady=12)
 
         # ── folder / zip paths ────────────────────────────────────────────────
-        self._build_section(main, "📁  Input / Output")
-        paths = tk.Frame(main, bg=BG2)
-        paths.pack(fill="x", pady=(0, 8))
+        self._build_section(main, "Input / Output")
+        paths = self._surface(main)
         paths.columnconfigure(1, weight=1)
 
         # Input folder row
-        tk.Label(paths, text="Input Folder:", bg=BG2, fg=FG2,
-                 font=("Segoe UI", 10), width=13, anchor="e").grid(
-            row=0, column=0, padx=(12, 6), pady=6, sticky="e")
+        self._field_label(paths, "Input folder", 0)
         self._folder_var = tk.StringVar()
         self._folder_var.trace_add("write", self._on_folder_changed)
         ttk.Entry(paths, textvariable=self._folder_var).grid(
-            row=0, column=1, sticky="ew", padx=(0, 6))
-        ttk.Button(paths, text="Browse…", width=9,
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=5)
+        ttk.Button(paths, text="Browse...", width=11,
                     command=self._browse_folder).grid(
-            row=0, column=2, padx=(0, 12))
+            row=0, column=2, pady=5)
 
         # PDF count label
-        self._pdf_count_lbl = tk.Label(paths, text="No folder selected",
-                                        bg=BG2, fg=FG2,
-                                        font=("Segoe UI", 9, "italic"))
+        self._pdf_count_lbl = ttk.Label(paths, text="No folder selected",
+                                        style="Muted.TLabel")
         self._pdf_count_lbl.grid(row=1, column=1, sticky="w", padx=(0, 6),
-                                  pady=(0, 4))
+                                 pady=(0, 8))
 
         # Output ZIP row
-        tk.Label(paths, text="Output ZIP:", bg=BG2, fg=FG2,
-                 font=("Segoe UI", 10), width=13, anchor="e").grid(
-            row=2, column=0, padx=(12, 6), pady=6, sticky="e")
+        self._field_label(paths, "Output ZIP", 2)
         self._zip_var = tk.StringVar()
         ttk.Entry(paths, textvariable=self._zip_var).grid(
-            row=2, column=1, sticky="ew", padx=(0, 6))
-        ttk.Button(paths, text="Browse…", width=9,
+            row=2, column=1, sticky="ew", padx=(0, 8), pady=5)
+        ttk.Button(paths, text="Browse...", width=11,
                     command=self._browse_zip).grid(
-            row=2, column=2, padx=(0, 12), pady=(0, 8))
+            row=2, column=2, pady=5)
 
         # ── settings ──────────────────────────────────────────────────────────
-        self._build_section(main, "⚙️  Settings")
-        cfg = tk.Frame(main, bg=BG2)
-        cfg.pack(fill="x", pady=(0, 8))
+        self._build_section(main, "Settings")
+        cfg = self._surface(main)
         cfg.columnconfigure(3, weight=1)
 
-        tk.Label(cfg, text="Model:", bg=BG2, fg=FG2,
-                 font=("Segoe UI", 10)).grid(
-            row=0, column=0, sticky="w", padx=(12, 4), pady=6)
+        ttk.Label(cfg, text="Model", style="Muted.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=6)
         self._model_var = tk.StringVar(value="phi3")
         ttk.Entry(cfg, textvariable=self._model_var, width=14).grid(
-            row=0, column=1, sticky="w", padx=(0, 16))
+            row=0, column=1, sticky="w", padx=(0, 18), pady=6)
 
-        tk.Label(cfg, text="Ollama URL:", bg=BG2, fg=FG2,
-                 font=("Segoe UI", 10)).grid(
-            row=0, column=2, sticky="w", padx=(0, 4))
+        ttk.Label(cfg, text="Ollama URL", style="Muted.TLabel").grid(
+            row=0, column=2, sticky="w", padx=(0, 8), pady=6)
         self._url_var = tk.StringVar(
             value="http://localhost:11434/api/generate")
         ttk.Entry(cfg, textvariable=self._url_var, width=38).grid(
-            row=0, column=3, sticky="ew", padx=(0, 12))
+            row=0, column=3, sticky="ew", pady=6)
 
         self._gpu_var  = tk.BooleanVar(value=True)
         self._json_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg, text="Use GPU  (EasyOCR)",
                          variable=self._gpu_var).grid(
             row=1, column=0, columnspan=2, sticky="w",
-            padx=(12, 0), pady=(0, 8))
+            pady=(4, 0))
         ttk.Checkbutton(cfg,
                          text="Include intermediate JSON files in ZIP",
                          variable=self._json_var).grid(
             row=1, column=2, columnspan=2, sticky="w",
-            padx=(0, 12), pady=(0, 8))
+            pady=(4, 0))
 
 # ── run button + status ───────────────────────────────────────────────
-        btn_row = ttk.Frame(main)
+        btn_row = ttk.Frame(main, style="TFrame")
         btn_row.pack(fill="x", pady=(0, 10))
-        self._run_btn = ttk.Button(btn_row, text="▶   Process Folder",
+        self._run_btn = ttk.Button(btn_row, text="Process Folder",
                                      style="Accent.TButton",
                                      command=self._on_run)
         self._run_btn.pack(side="left")
-        ttk.Button(btn_row, text="📷  Live Mode",
+        ttk.Button(btn_row, text="Live Mode", style="Secondary.TButton",
                        command=self._on_live_mode).pack(side="left", padx=(8, 0))
-        self._stop_live_btn = ttk.Button(btn_row, text="⏹  Stop",
+        self._stop_live_btn = ttk.Button(btn_row, text="Stop",
+                                        style="Danger.TButton",
                                         command=self._stop_live_mode,
                                         state="disabled")
         self._stop_live_btn.pack(side="left", padx=(8, 0))
@@ -271,60 +309,58 @@ class App(tk.Tk):
         self._status_lbl.pack(side="left", padx=16)
 
         # ── overall progress ──────────────────────────────────────────────────
-        self._build_section(main, "⏳  Progress")
-        prog = tk.Frame(main, bg=BG2)
-        prog.pack(fill="x", pady=(0, 4))
+        self._build_section(main, "Progress")
+        prog = self._surface(main, pady=(0, 8))
 
-        self._overall_lbl = tk.Label(prog, text="Waiting…",
-                                      bg=BG2, fg=FG2,
-                                      font=("Segoe UI", 9), anchor="w")
-        self._overall_lbl.pack(fill="x", padx=12, pady=(6, 2))
+        self._overall_lbl = ttk.Label(prog, text="Waiting...",
+                                      style="Muted.TLabel")
+        self._overall_lbl.pack(fill="x", pady=(0, 4))
         self._overall_bar = ttk.Progressbar(
             prog, style="Accent.Horizontal.TProgressbar",
             mode="determinate", maximum=100)
-        self._overall_bar.pack(fill="x", padx=12, pady=(0, 4))
+        self._overall_bar.pack(fill="x", pady=(0, 8))
 
-        self._step_lbl = tk.Label(prog, text="",
-                                   bg=BG2, fg=FG2,
-                                   font=("Segoe UI", 9), anchor="w")
-        self._step_lbl.pack(fill="x", padx=12, pady=(2, 2))
+        self._step_lbl = ttk.Label(prog, text="", style="Muted.TLabel")
+        self._step_lbl.pack(fill="x", pady=(2, 4))
         self._step_bar = ttk.Progressbar(
             prog, style="Sub.Horizontal.TProgressbar",
             mode="determinate", maximum=100)
-        self._step_bar.pack(fill="x", padx=12, pady=(0, 8))
+        self._step_bar.pack(fill="x")
 
         # ── log ───────────────────────────────────────────────────────────────
-        self._build_section(main, "📋  Log")
-        log_f = tk.Frame(main, bg=BG3)
+        self._build_section(main, "Log")
+        log_f = tk.Frame(main, bg=SURFACE_3, highlightthickness=1,
+                         highlightbackground=BORDER)
         log_f.pack(fill="x", pady=(0, 8))
-        self._log_text = tk.Text(log_f, height=6, bg=BG3, fg=FG2,
-                                  font=("Consolas", 9), bd=0,
-                                  relief="flat", state="disabled",
-                                  wrap="word", insertbackground=FG)
+        self._log_text = tk.Text(log_f, height=7, bg=SURFACE_3, fg=FG_MUTED,
+                                 font=FONT_MONO, bd=0,
+                                 relief="flat", state="disabled",
+                                 wrap="word", insertbackground=FG)
         lsb = ttk.Scrollbar(log_f, command=self._log_text.yview)
         self._log_text.configure(yscrollcommand=lsb.set)
         lsb.pack(side="right", fill="y")
-        self._log_text.pack(fill="both", expand=True, padx=4, pady=4)
-        self._log_text.tag_config("INFO",    foreground=FG2)
+        self._log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        self._log_text.tag_config("INFO",    foreground=FG_MUTED)
         self._log_text.tag_config("WARNING", foreground=WARNING)
         self._log_text.tag_config("ERROR",   foreground=ERROR_C)
         self._log_text.tag_config("DEBUG",   foreground=BORDER)
 
         # ── results table ─────────────────────────────────────────────────────
-        self._build_section(main, "🔍  Results per File")
-        tree_f = tk.Frame(main, bg=BG3)
+        self._build_section(main, "Results per File")
+        tree_f = tk.Frame(main, bg=SURFACE_3, highlightthickness=1,
+                          highlightbackground=BORDER)
         tree_f.pack(fill="both", expand=True, pady=(0, 8))
 
         cols = ("file", "errors", "spe", "gra", "sem", "status")
         self._tree = ttk.Treeview(tree_f, columns=cols,
                                    show="headings", selectmode="browse")
         for col, w, anc, label in [
-            ("file",   260, "w",      "File"),
-            ("errors",  52, "center", "Errors"),
-            ("spe",     48, "center", "SPE"),
-            ("gra",     48, "center", "GRA"),
-            ("sem",     48, "center", "SEM"),
-            ("status", 130, "w",      "Status"),
+            ("file",   300, "w",      "File"),
+            ("errors",  70, "center", "Errors"),
+            ("spe",     60, "center", "SPE"),
+            ("gra",     60, "center", "GRA"),
+            ("sem",     60, "center", "SEM"),
+            ("status", 160, "w",      "Status"),
         ]:
             self._tree.heading(col, text=label)
             self._tree.column(col, width=w, anchor=anc, minwidth=30)
@@ -337,25 +373,35 @@ class App(tk.Tk):
         self._tree.tag_configure("done",    foreground=SUCCESS)
         self._tree.tag_configure("active",  foreground=WARNING)
         self._tree.tag_configure("error",   foreground=ERROR_C)
-        self._tree.tag_configure("waiting", foreground=FG2)
+        self._tree.tag_configure("waiting", foreground=FG_MUTED)
 
         # ── bottom bar ────────────────────────────────────────────────────────
         bottom = ttk.Frame(main)
         bottom.pack(fill="x", pady=(0, 4))
-        self._open_btn = ttk.Button(bottom, text="📂  Open Output ZIP",
+        self._open_btn = ttk.Button(bottom, text="Open Output ZIP",
+                                     style="Secondary.TButton",
                                      command=self._open_zip,
                                      state="disabled")
         self._open_btn.pack(side="left")
-        self._summary_lbl = ttk.Label(bottom, text="", foreground=FG2)
+        self._summary_lbl = ttk.Label(bottom, text="", foreground=FG_MUTED)
         self._summary_lbl.pack(side="right")
 
+    def _surface(self, parent, pady=(0, 10)):
+        frame = ttk.Frame(parent, style="Surface.TFrame", padding=14)
+        frame.pack(fill="x", pady=pady)
+        return frame
+
+    def _field_label(self, parent, text: str, row: int):
+        ttk.Label(parent, text=text, style="Muted.TLabel").grid(
+            row=row, column=0, sticky="e", padx=(0, 10), pady=6)
+
     def _build_section(self, parent, text: str):
-        row = tk.Frame(parent, bg=BG)
+        row = ttk.Frame(parent, style="TFrame")
         row.pack(fill="x", pady=(6, 2))
-        tk.Label(row, text=text, bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 10, "bold")).pack(side="left")
-        tk.Frame(row, bg=BORDER, height=1).pack(
-            side="left", fill="x", expand=True, padx=(8, 0), pady=8)
+        ttk.Label(row, text=text, foreground=ACCENT,
+                  font=FONT_SECTION).pack(side="left")
+        ttk.Separator(row, orient="horizontal").pack(
+            side="left", fill="x", expand=True, padx=(10, 0))
 
     # ── logging ───────────────────────────────────────────────────────────────
 
@@ -394,7 +440,7 @@ class App(tk.Tk):
         n = len(pdfs)
         self._pdf_count_lbl.config(
             text=f"Found {n} PDF{'s' if n != 1 else ''}" if n else
-                 "⚠  No PDF files found in this folder")
+                 "No PDF files found in this folder")
         # auto-fill ZIP path
         if not self._zip_var.get():
             self._zip_var.set(str(Path(folder).parent /
@@ -404,7 +450,7 @@ class App(tk.Tk):
         for p in pdfs:
             self._tree.insert("", "end",
                                iid=p.name,
-                               values=(p.name, "—", "—", "—", "—", "⏸ waiting"),
+                               values=(p.name, "-", "-", "-", "-", "Waiting"),
                                tags=("waiting",))
 
     def _browse_zip(self):
@@ -492,7 +538,7 @@ class App(tk.Tk):
         # reset table rows to waiting
         for p in self._pdf_list:
             self._tree.item(p.name,
-                             values=(p.name, "—", "—", "—", "—", "⏸ waiting"),
+                             values=(p.name, "-", "-", "-", "-", "Waiting"),
                              tags=("waiting",))
 
         threading.Thread(target=self._run_batch, daemon=True).start()
@@ -533,7 +579,7 @@ class App(tk.Tk):
                     file_pct = int(idx / total * 100)
                     self._set_overall(
                         f"File {idx+1}/{total} — {name}", file_pct)
-                    self._update_row(name, None, "⏳ processing…", "active")
+                    self._update_row(name, None, "Processing...", "active")
                     log.info(f"━━━ [{idx+1}/{total}] {name} ━━━")
 
                     try:
@@ -571,13 +617,13 @@ class App(tk.Tk):
                                 json.dumps(errors, ensure_ascii=False,
                                            indent=2), encoding="utf-8")
 
-                        self._update_row(name, errors, "✅ done", "done")
+                        self._update_row(name, errors, "Done", "done")
                         all_errors += len(errors)
                         succeeded  += 1
 
                     except Exception as e:
                         log.error(f"  {name} failed: {e}", exc_info=False)
-                        self._update_row(name, None, f"❌ {e}", "error")
+                        self._update_row(name, None, f"Failed: {e}", "error")
                         failed += 1
 
                 # Pack everything into ZIP
@@ -590,18 +636,18 @@ class App(tk.Tk):
 
             self._zip_path = zip_out
             elapsed = time.time() - t0
-            summary = (f"✅  {succeeded}/{total} files  |  "
+            summary = (f"Complete: {succeeded}/{total} files  |  "
                        f"{all_errors} total errors  |  {elapsed:.0f}s")
-            self._set_overall(f"Complete — {succeeded}/{total} files OK", 100)
+            self._set_overall(f"Complete - {succeeded}/{total} files OK", 100)
             self._set_status(summary, "Success.TLabel")
             self.after(0, lambda: self._summary_lbl.config(
                 text=f"{succeeded} OK  {failed} failed"))
             self.after(0, lambda: self._open_btn.config(state="normal"))
-            log.info(f"ZIP saved → {zip_out}  ({succeeded} files, {elapsed:.1f}s)")
+            log.info(f"ZIP saved -> {zip_out}  ({succeeded} files, {elapsed:.1f}s)")
 
         except Exception as e:
             log.error(f"Batch failed: {e}", exc_info=True)
-            self._set_status(f"❌  {e}", "Error.TLabel")
+            self._set_status(f"Failed: {e}", "Error.TLabel")
             self._set_overall("Failed", 0)
         finally:
             self._running = False
@@ -642,16 +688,24 @@ class App(tk.Tk):
     def _ask_camera(self, choices: str, devices: list) -> int | None:
         dialog = tk.Toplevel(self)
         dialog.title("Select Camera")
-        dialog.geometry("300x200")
+        dialog.geometry("420x260")
+        dialog.configure(bg=BG)
         dialog.transient(self)
 
-        tk.Label(dialog, text="Select camera:",
-                font=("Segoe UI", 10)).pack(pady=8)
+        content = ttk.Frame(dialog, style="Surface.TFrame", padding=14)
+        content.pack(fill="both", expand=True, padx=12, pady=12)
+
+        ttk.Label(content, text="Select camera", style="Muted.TLabel").pack(
+            anchor="w", pady=(0, 8))
 
         var = tk.IntVar(value=0)
         for d in devices:
-            tk.Radiobutton(dialog, text=f"{d['name']} ({d['resolution']})",
-                        variable=var, value=d['id']).pack(anchor="w", padx=20)
+            ttk.Radiobutton(
+                content,
+                text=f"{d['name']} ({d['resolution']})",
+                variable=var,
+                value=d['id'],
+            ).pack(anchor="w", pady=3)
 
         def on_ok():
             dialog.result = var.get()
@@ -661,15 +715,19 @@ class App(tk.Tk):
             dialog.result = None
             dialog.destroy()
 
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=8)
-        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="left", padx=4)
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
-        dialog.result = 0
+        btn_frame = ttk.Frame(content, style="Surface.TFrame")
+        btn_frame.pack(fill="x", pady=(14, 0))
+        ttk.Button(btn_frame, text="OK", style="Accent.TButton",
+                   command=on_ok).pack(side="left")
+        ttk.Button(btn_frame, text="Cancel", style="Secondary.TButton",
+                   command=on_cancel).pack(side="left", padx=(8, 0))
+
+        dialog.result = None
         dialog.grab_set()
         self.wait_window(dialog)
-        return getattr(dialog, "result", 0)
+        return getattr(dialog, "result", None)
 
     def _run_live_mode(self, camera_id: int):
         from live_camera import LiveModeController
