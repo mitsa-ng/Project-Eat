@@ -1,5 +1,5 @@
 <h1 align="center">
-  AI English Essay Annotaiontool
+  AI English Essay Annotation Tool
 </h1>
 
 <p align="center">
