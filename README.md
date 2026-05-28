@@ -149,7 +149,7 @@ If you use this software in academic work, please cite it as:
 @software{project_eat,
   author = {Project-EAT Contributors},
   title = {AI English Essay Corrector},
-  year = {2025},
+  year = {2026},
   url = {https://github.com/mitsa-ng/Project-EAT}
 }
 ```
