@@ -33,8 +33,6 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 
 🌟 **Sidebar Annotation Model** — Errors are highlighted in the body text with color-coded underlines (red for spelling, orange for grammar, blue for semantic). Correction tags are placed in a reserved right-side column with leader lines, ensuring no overlap with the original essay text.
 
-![Annotated PDF layout](docs/annotated_layout.png)
-
 🌟 **Live Camera Mode** — Point your webcam at a printed essay for real-time OCR and error analysis. Supports OpenCV-based camera selection and live streaming feedback.
 
 🌟 **Batch GUI Processor** — A dark-themed Tkinter desktop application that processes entire folders of PDF essays and packs all annotated outputs into a single ZIP archive, complete with per-file progress tracking and error summaries.
@@ -152,6 +150,6 @@ If you use this software in academic work, please cite it as:
   author = {Project-EAT Contributors},
   title = {AI English Essay Corrector},
   year = {2025},
-  url = {https://github.com/your-org/Project-EAT}
+  url = {https://github.com/mitsa-ng/Project-EAT}
 }
 ```
