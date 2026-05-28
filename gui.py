@@ -528,7 +528,14 @@ class App(tk.Tk):
         if self._running:
             return
 
+        use_gpu = self._gpu_var.get()
+        model = self._model_var.get().strip() or "phi3"
+        url = self._url_var.get().strip()
+        save_json = self._json_var.get()
+        pdfs = list(self._pdf_list)
+
         # reset UI
+        self._running = True
         self._open_btn.config(state="disabled")
         self._set_status("Running…", "Warn.TLabel")
         self._run_btn.config(state="disabled")
@@ -541,10 +548,13 @@ class App(tk.Tk):
                              values=(p.name, "-", "-", "-", "-", "Waiting"),
                              tags=("waiting",))
 
-        threading.Thread(target=self._run_batch, daemon=True).start()
+        threading.Thread(
+            target=self._run_batch,
+            args=(pdfs, zip_out, use_gpu, model, url, save_json),
+            daemon=True,
+        ).start()
 
-    def _run_batch(self):
-        self._running = True
+    def _run_batch(self, pdfs, zip_out, use_gpu, model, url, save_json):
         t0 = time.time()
         log = logging.getLogger("gui")
 
@@ -553,12 +563,6 @@ class App(tk.Tk):
             from nlp_engine  import NLPEngine
             from annotator   import Annotator
 
-            use_gpu   = self._gpu_var.get()
-            model     = self._model_var.get().strip() or "phi3"
-            url       = self._url_var.get().strip()
-            save_json = self._json_var.get()
-            zip_out   = self._zip_var.get().strip()
-            pdfs      = self._pdf_list
             total     = len(pdfs)
 
             # Initialise engines once (avoid reloading model per file)
@@ -744,28 +748,34 @@ class App(tk.Tk):
 
         def on_results(ocr_words, errors):
             n = sum(len(v) for v in ocr_words.values())
-            self._log_text.configure(state="normal")
-            self._log_text.insert("end",
-                f"  → {n} words, {len(errors)} errors\n")
+            lines = [f"  → {n} words, {len(errors)} errors\n"]
             for e in errors[:3]:
-                self._log_text.insert("end",
-                    f"     [{e['type']:8s}] {e['original']} → {e['suggestion']}\n")
-            self._log_text.see("end")
-            self._log_text.configure(state="disabled")
+                lines.append(
+                    f"     [{e['type']:8s}] {e['original']} → {e['suggestion']}\n"
+                )
 
-        threading.Thread(
-            target=self._run_live_thread,
-            args=(camera_id, on_results),
-            daemon=True
-        ).start()
+            def _append():
+                self._log_text.configure(state="normal")
+                self._log_text.insert("end", "".join(lines))
+                self._log_text.see("end")
+                self._log_text.configure(state="disabled")
 
-    def _run_live_thread(self, camera_id: int, callback):
-        from live_camera import LiveModeController
-        from nlp_engine import NLPEngine
+            self.after(0, _append)
 
         model = self._model_var.get().strip() or "phi3"
         url = self._url_var.get().strip()
         use_gpu = self._gpu_var.get()
+
+        threading.Thread(
+            target=self._run_live_thread,
+            args=(camera_id, on_results, model, url, use_gpu),
+            daemon=True
+        ).start()
+
+    def _run_live_thread(self, camera_id: int, callback, model: str,
+                         url: str, use_gpu: bool):
+        from live_camera import LiveModeController
+        from nlp_engine import NLPEngine
 
         nlp = NLPEngine(model=model, ollama_url=url)
         controller = LiveModeController(use_gpu=use_gpu)
@@ -773,11 +783,14 @@ class App(tk.Tk):
         try:
             controller.start(camera_id=camera_id, callback=callback, nlp_engine=nlp)
         except Exception as e:
-            import traceback
-            self._log_text.configure(state="normal")
-            self._log_text.insert("end", f"Error: {e}\n")
-            self._log_text.see("end")
-            self._log_text.configure(state="disabled")
+            error_msg = str(e)
+            def _append_error():
+                self._log_text.configure(state="normal")
+                self._log_text.insert("end", f"Error: {error_msg}\n")
+                self._log_text.see("end")
+                self._log_text.configure(state="disabled")
+
+            self.after(0, _append_error)
         finally:
             self._live_running = False
             self.after(0, lambda: self._run_btn.config(state="normal"))

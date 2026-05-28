@@ -3,3 +3,8 @@
 .agent/
 __pycache__/
 openspec/.vector-search.db*
+openspec
+sampleREADME.md
+pdfs_annotated.zip
+.DS_Store
+docs/
