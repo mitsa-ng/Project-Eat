@@ -9,3 +9,16 @@ pdfs_annotated.zip
 .DS_Store
 docs/
 pdfs/English education activity design journal.pdf
+pdfs/2_annotated.pdf
+.gitignore
+pdfs/2_ocr.json
+.pdf
+pdfs_annotated/test1_annotated.pdf
+.gitignore
+pdfs/2.pdf
+.gitignore
+pdfs_annotated/2_annotated.pdf
+.gitignore
+pdfs_annotated/English education activity design journal_annotated.pdf
+.gitignore
+pdfs/2_errors.json

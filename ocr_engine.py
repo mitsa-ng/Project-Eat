@@ -24,6 +24,7 @@ All coordinates are in PDF point-space (origin = top-left, 1 pt = 1/72 inch).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+import cv2
 import fitz  # PyMuPDF ≥ 1.23
 import logging
 import numpy as np
@@ -31,10 +32,51 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# ── lazy spell-check loader ─────────────────────────────────────────────────────
+_SPELL_CHECKER = None
+
+def _get_spell_checker():
+    """Lazy singleton for SpellChecker (pyspellchecker)."""
+    global _SPELL_CHECKER
+    if _SPELL_CHECKER is None:
+        try:
+            from spellchecker import SpellChecker
+            _SPELL_CHECKER = SpellChecker()
+            logger.info("SpellChecker loaded")
+        except ImportError:
+            logger.warning("pyspellchecker not installed — spell-check disabled")
+            _SPELL_CHECKER = False
+    return _SPELL_CHECKER
+
+
+def _spell_correct_word(word: str) -> str:
+    """
+    If *word* is a known English word → return as-is.
+    Otherwise return the closest correction if edit-distance ≤ 2,
+    or an empty string (meaning the token is garbage / unreadable OCR).
+    When spell-checker is unavailable, returns the word unchanged.
+    """
+    spell = _get_spell_checker()
+    if spell is False:
+        return word
+    if word in spell:
+        return word
+    candidates = spell.candidates(word)
+    if not candidates:
+        return ""
+    corrected = spell.correction(word)
+    if corrected and corrected != word and len(corrected) >= 2:
+        return corrected
+    return ""
+
 # ── tunables ──────────────────────────────────────────────────────────────────
 DIGITAL_THRESHOLD = 15      # native word count ≥ this → treat page as digital
-RENDER_DPI        = 200     # render resolution for EasyOCR path
+DIGITAL_DPI       = 150     # render resolution for digital pages
+SCAN_DPI          = 300     # render resolution for scanned / handwritten pages
 USE_GPU           = True    # attempt CUDA; falls back gracefully to CPU
+EASYOCR_TEXT_THRESHOLD = 0.5
+EASYOCR_CANVAS_SIZE    = 3200
+CONFIDENCE_THRESHOLD   = 0.4
 
 
 class OCREngine:
@@ -121,33 +163,54 @@ class OCREngine:
 
     # ── scanned / handwritten extraction (EasyOCR) ───────────────────────────
 
-    def _extract_easyocr(self, page: fitz.Page) -> list:
+    def _extract_easyocr(self, page: fitz.Page, dpi: int = SCAN_DPI) -> list:
         """
-        Render page → RGB image → EasyOCR → scale boxes to PDF point-space.
+        Render page → preprocess → EasyOCR → scale boxes to PDF point-space.
         """
-        zoom   = RENDER_DPI / 72
+        zoom   = dpi / 72
         mat    = fitz.Matrix(zoom, zoom)
         pix    = page.get_pixmap(matrix=mat, alpha=False)
         img    = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         arr    = np.array(img)
 
-        h_img, w_img = arr.shape[:2]
+        gray    = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        arr     = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 31, 2
+        )
+
+        h_img, w_img = arr.shape[:2] if arr.ndim == 3 else (arr.shape[0], arr.shape[1])
         scale_x      = page.rect.width  / w_img
         scale_y      = page.rect.height / h_img
 
         reader  = self._get_reader()
-        results = reader.readtext(arr, detail=1, paragraph=False)
+        results = reader.readtext(
+            arr, detail=1, paragraph=False,
+            text_threshold=EASYOCR_TEXT_THRESHOLD,
+            canvas_size=EASYOCR_CANVAS_SIZE,
+        )
 
         words = []
         for (raw_box, text, conf) in results:
             text = text.strip()
-            if not text or conf < 0.25:
+            if not text or conf < CONFIDENCE_THRESHOLD:
                 continue
             box = [[pt[0] * scale_x, pt[1] * scale_y] for pt in raw_box]
             words.append({"text": text, "box": box})
 
-        logger.debug(f"  EasyOCR: {len(words)} words (conf ≥ 0.25)")
-        return words
+        # spell-check post-processing — filter / correct OCR garbage
+        cleaned = []
+        for w in words:
+            corrected = _spell_correct_word(w["text"])
+            if corrected:
+                w["text"] = corrected
+                cleaned.append(w)
+
+        logger.debug(
+            f"  EasyOCR: {len(cleaned)} words after spell-check "
+            f"(was {len(words)}, conf ≥ {CONFIDENCE_THRESHOLD})"
+        )
+        return cleaned
 
     # ── per-page dispatch ─────────────────────────────────────────────────────
 
@@ -159,10 +222,26 @@ class OCREngine:
           1. Run PyMuPDF native extraction.
           2. If ≥ DIGITAL_THRESHOLD words found → digital mode (return now).
           3. Otherwise → EasyOCR (scanned or handwritten).
+
+        Heuristic: pages with DIGITAL_THRESHOLD ≤ count < 2× threshold whose
+        native words are mostly short / numeric (page numbers, headers) are
+        re-routed to EasyOCR even if the raw count passes the threshold.
         """
         native = self._extract_digital(page)
 
         if len(native) >= DIGITAL_THRESHOLD:
+            # guard against handwritten pages with embedded page furniture
+            if len(native) < DIGITAL_THRESHOLD * 2:
+                short = sum(1 for w in native if len(w["text"]) <= 3 or w["text"].isdigit())
+                ratio = short / max(len(native), 1)
+                if ratio > 0.6:
+                    logger.info(
+                        f"  Page {page.number + 1}: LOW-QUALITY DIGITAL "
+                        f"({len(native)} words, {ratio:.0%} short/numeric → "
+                        f"falling back to EasyOCR @ {SCAN_DPI} DPI)"
+                    )
+                    return self._extract_easyocr(page, dpi=SCAN_DPI)
+
             logger.info(
                 f"  Page {page.number + 1}: DIGITAL  "
                 f"({len(native)} words via PyMuPDF)"
@@ -171,9 +250,9 @@ class OCREngine:
 
         logger.info(
             f"  Page {page.number + 1}: SCAN/HANDWRITTEN  "
-            f"(only {len(native)} native words → EasyOCR)"
+            f"(only {len(native)} native words → EasyOCR @ {SCAN_DPI} DPI)"
         )
-        return self._extract_easyocr(page)
+        return self._extract_easyocr(page, dpi=SCAN_DPI)
 
     # ── public API ────────────────────────────────────────────────────────────
 

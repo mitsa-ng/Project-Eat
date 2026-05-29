@@ -44,30 +44,19 @@ SYSTEM_PROMPT = """You are an English essay proofreader. Output a JSON array of 
 
 OUTPUT FORMAT — one object per error, exactly like this:
 [
-{"original":"intresting","type":"spelling","suggestion":"interesting"},
-{"original":"peoples","type":"grammar","suggestion":"people"},
-{"original":"eats","type":"grammar","suggestion":"eat"},
-{"original":"convinient","type":"spelling","suggestion":"convenient"},
-{"original":"hotly","type":"grammar","suggestion":"hot"},
-{"original":"raining","type":"grammar","suggestion":"rains"},
-{"original":"drive","type":"grammar","suggestion":"drives"},
-{"original":"smells like a trash","type":"semantic","suggestion":"smells like trash"},
-{"original":"goodest","type":"spelling","suggestion":"best"},
-{"original":"bubble milks tea","type":"semantic","suggestion":"bubble milk tea"}
+{"original":"recieved","type":"spelling","suggestion":"received"},
+{"original":"she go","type":"grammar","suggestion":"she goes"},
+{"original":"more better","type":"grammar","suggestion":"better"},
+{"original":"the future is bright and colorful","type":"semantic","suggestion":"the future is bright"}
 ]
 
 RULES:
 - Output ONLY the JSON array. No words before or after it.
-- One object per error. NEVER group multiple errors into one object.
-- "original" = the exact text as written in the essay.
-- "type" = spelling, grammar, or semantic.
-- "suggestion" = the corrected replacement.
+- "original" MUST be the exact text as written in the essay. Scan the essay carefully.
+- NEVER output errors that are not actually present in the essay text.
+- Each error is 1-4 words. Never full sentences.
+- type = "spelling", "grammar", or "semantic".
 - If no errors exist, output exactly: []"""
-
-USER_TEMPLATE = """Find ALL errors in this essay. Output ONLY the JSON array, nothing else.
-
-{text}"""
-
 
 class NLPEngine:
     """
@@ -123,27 +112,47 @@ class NLPEngine:
 
     # ── Ollama call ───────────────────────────────────────────────────────────
 
-    def _call_ollama(self, text: str) -> str:
-        """POST to Ollama, return raw response string."""
+    def _call_ollama(self, text: str, chunk_index: int = 0, total_chunks: int = 0) -> str:
+        """POST to Ollama /api/generate, return raw response string."""
+        import time as _time
+        word_count = len(text.split())
+        logger.info(
+            f"  Calling Ollama chunk {chunk_index}/{total_chunks} "
+            f"({word_count} words, model={self.model}) …"
+        )
         payload = {
             "model":   self.model,
+            "prompt":  text,
             "system":  SYSTEM_PROMPT,
-            "prompt":  USER_TEMPLATE.format(text=text),
             "stream":  False,
             "options": {
                 "temperature": TEMPERATURE,
                 "num_predict": MAX_TOKENS,
             },
         }
+        t0 = _time.time()
         try:
-            resp = requests.post(self.ollama_url, json=payload, timeout=180)
+            resp = requests.post(self.ollama_url, json=payload, timeout=600)
             resp.raise_for_status()
         except requests.exceptions.ConnectionError:
             raise RuntimeError(
                 "Cannot reach Ollama.  Start it first:  ollama serve\n"
                 "Then pull the model:                   ollama pull phi3"
             )
-        return resp.json().get("response", "")
+        except requests.exceptions.ReadTimeout:
+            elapsed = _time.time() - t0
+            logger.error(
+                f"  Ollama read timeout after {elapsed:.0f}s "
+                f"(chunk {chunk_index}/{total_chunks}, {word_count} words).\n"
+                f"  Try: restart Ollama with 'ollama serve' or use a smaller model."
+            )
+            raise
+
+        elapsed = _time.time() - t0
+        data = resp.json()
+        raw = data.get("response", "")
+        logger.info(f"  Ollama responded in {elapsed:.1f}s  ({len(raw)} chars)")
+        return raw
 
     # ── fault-tolerant JSON parser ────────────────────────────────────────────
 
@@ -294,6 +303,43 @@ class NLPEngine:
             })
         return out
 
+    @staticmethod
+    def _filter_useless(errors: list) -> list:
+        """Remove errors where suggestion is identical to original (no-op)."""
+        kept = []
+        for e in errors:
+            orig = e.get("original", "").strip()
+            sugg = e.get("suggestion", "").strip()
+            if orig.lower() == sugg.lower():
+                logger.debug(f"  Filtered no-op: {orig!r} -> {sugg!r}")
+                continue
+            kept.append(e)
+        if len(kept) < len(errors):
+            logger.info(f"  Filtered {len(errors) - len(kept)} no-op(s)")
+        return kept
+
+    @staticmethod
+    def _filter_hallucinations(errors: list, text: str) -> list:
+        """
+        Remove errors whose 'original' text does NOT appear verbatim (case-insensitive)
+        in the essay text.  Phi-3 often emits errors from its few-shot prompt examples
+        that don't exist in the actual essay — this filter catches those.
+        """
+        if not errors:
+            return []
+        text_lower = text.lower()
+        kept = []
+        for e in errors:
+            orig = e.get("original", "").strip()
+            if not orig:
+                continue
+            if orig.lower() in text_lower:
+                kept.append(e)
+            else:
+                logger.debug(f"  Filtered hallucination: {orig!r} not in essay text")
+        if len(kept) < len(errors):
+            logger.info(f"  Filtered {len(errors) - len(kept)} hallucination(s)")
+        return kept
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -314,12 +360,14 @@ class NLPEngine:
                 f"  Analysing chunk {i+1}/{len(chunks)}  "
                 f"({len(chunk.split())} words) …"
             )
-            raw    = self._call_ollama(chunk)
+            raw    = self._call_ollama(chunk, chunk_index=i + 1, total_chunks=len(chunks))
             errors = self._parse(raw)
             all_err.extend(errors)
-            logger.debug(f"  Chunk {i+1}: {len(errors)} raw error(s)")
+            logger.info(f"  Chunk {i+1}/{len(chunks)}: {len(errors)} error(s)")
 
         final = self._validate(all_err)
+        final = self._filter_hallucinations(final, text)
+        final = self._filter_useless(final)
         logger.info(f"Analysis complete: {len(final)} error(s)")
         return final
 
@@ -332,6 +380,8 @@ class NLPEngine:
         if not text.strip():
             logger.warning("Empty OCR text — nothing to analyse.")
             return []
+        word_count = len(text.split())
+        logger.info(f"Analysing {word_count} words from OCR output …")
         return self.analyse_text(text)
 
 

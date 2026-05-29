@@ -68,11 +68,12 @@ def run_pipeline(args: argparse.Namespace) -> str:
     logger.info("━━━ Step 1/3 — OCR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     logger.info("  Digital PDF → PyMuPDF  |  Scanned/Handwritten → EasyOCR")
     ocr = OCREngine(use_gpu=not args.no_gpu)
+    t1 = time.time()
     ocr_words = ocr.process_pdf(str(inp))
     total_words = sum(len(v) for v in ocr_words.values())
     logger.info(
         f"OCR done: {total_words} words  |  {len(ocr_words)} page(s)  "
-        f"[{time.time()-t0:.1f}s]"
+        f"[{time.time()-t1:.1f}s]"
     )
 
     if total_words == 0:
@@ -84,9 +85,10 @@ def run_pipeline(args: argparse.Namespace) -> str:
     # ── Step 2: NLP ───────────────────────────────────────────────────────────
     logger.info("━━━ Step 2/3 — Grammar Analysis (Phi-3) ━━━━━━━━━━━━━━━━━━━━")
     nlp    = NLPEngine(model=args.model, ollama_url=args.ollama_url)
+    t2 = time.time()
     errors = nlp.analyse(ocr_words)
     logger.info(
-        f"Analysis done: {len(errors)} error(s)  [{time.time()-t0:.1f}s]"
+        f"Analysis done: {len(errors)} error(s)  [{time.time()-t2:.1f}s]"
     )
 
     if not errors:

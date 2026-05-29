@@ -20,7 +20,8 @@ easyocr>=1.7.1         # GPU-accelerated OCR for scanned/handwritten pages
 Pillow>=10.0.0         # image handling (EasyOCR dependency)
 numpy>=1.24.0          # array ops (EasyOCR dependency)
 requests>=2.31.0       # HTTP client for Ollama REST API
-opencv-python-headless>=4.8.0  # camera access for live mode
+opencv-python-headless>=4.8.0  # camera access for live mode, image preprocessing
+pyspellchecker>=0.8.0          # dictionary-based spell-check for OCR post-processing
 
 # ── Step 3: Install & run Ollama ──────────────────────────────────────────────
 # Download from: https://ollama.com/download  (Windows installer)

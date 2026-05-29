@@ -268,11 +268,11 @@ class App(tk.Tk):
 
         ttk.Label(cfg, text="Model", style="Muted.TLabel").grid(
             row=0, column=0, sticky="w", padx=(0, 8), pady=6)
-        self._model_var = tk.StringVar(value="phi3")
+        self._model_var = tk.StringVar(value="gemma4:e4b-mlx")
         ttk.Entry(cfg, textvariable=self._model_var, width=14).grid(
             row=0, column=1, sticky="w", padx=(0, 18), pady=6)
 
-        ttk.Label(cfg, text="Ollama URL", style="Muted.TLabel").grid(
+        ttk.Label(cfg, text="LLM API URL", style="Muted.TLabel").grid(
             row=0, column=2, sticky="w", padx=(0, 8), pady=6)
         self._url_var = tk.StringVar(
             value="http://localhost:11434/api/generate")
