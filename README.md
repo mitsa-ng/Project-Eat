@@ -42,7 +42,7 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  OCREngine   │ ──→ │  NLPEngine   │ ──→ │  Annotator   │
-│  (PyMuPDF /  │     │  (gemma4:e4b-mlx via  │     │  (fitz shape │
+│  (PyMuPDF /  │     │  (gemma4:e4b │     │  (fitz shape │
 │   EasyOCR)   │     │   Ollama)    │     │   drawing)   │
 └──────────────┘     └──────────────┘     └──────────────┘
        │                     │                     │
