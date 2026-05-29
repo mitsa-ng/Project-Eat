@@ -17,7 +17,7 @@
 <img src="https://badgen.net/badge/platform/macOS%20%7C%20Windows%20%7C%20Linux/cyan" alt="platform" />
 </a>
 <a href="#" target="_blank">
-<img src="https://badgen.net/badge/LLM/Phi-3/orange" alt="LLM" />
+<img src="https://badgen.net/badge/LLM/gemma4:e4b-mlx/orange" alt="LLM" />
 </a>
 </p>
 
@@ -29,7 +29,7 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 
 🌟 **Hybrid OCR Engine** — Automatically detects page type and selects the optimal extraction strategy: PyMuPDF for digital PDFs (instant, pixel-perfect) and EasyOCR with optional CUDA acceleration for scanned or handwritten pages.
 
-🌟 **LLM-Powered Error Detection** — Leverages Phi-3 (via Ollama) with a structured few-shot prompt to identify spelling, grammar, and semantic errors. Long essays are chunked to avoid context-window overflow; results are deduplicated and validated.
+🌟 **LLM-Powered Error Detection** — Leverages gemma4:e4b-mlx (via Ollama) with a structured few-shot prompt to identify spelling, grammar, and semantic errors. Long essays are chunked to avoid context-window overflow; results are deduplicated and validated.
 
 🌟 **Sidebar Annotation Model** — Errors are highlighted in the body text with color-coded underlines (red for spelling, orange for grammar, blue for semantic). Correction tags are placed in a reserved right-side column with leader lines, ensuring no overlap with the original essay text.
 
@@ -42,7 +42,7 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  OCREngine   │ ──→ │  NLPEngine   │ ──→ │  Annotator   │
-│  (PyMuPDF /  │     │  (Phi-3 via  │     │  (fitz shape │
+│  (PyMuPDF /  │     │  (gemma4:e4b │     │  (fitz shape │
 │   EasyOCR)   │     │   Ollama)    │     │   drawing)   │
 └──────────────┘     └──────────────┘     └──────────────┘
        │                     │                     │
@@ -67,12 +67,12 @@ python -c "import torch; print(torch.cuda.is_available())"
 # Expected: True
 ```
 
-#### 2. Install Ollama and Pull Phi-3
+#### 2. Install Ollama and Pull gemma4:e4b-mlx
 
 Download from [ollama.com](https://ollama.com), then:
 
 ```bash
-ollama pull phi3
+ollama pull gemma4:e4b-mlx
 ollama serve
 ```
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 ```bash
 python main.py essay.pdf
 python main.py essay.pdf --output corrected.pdf --save-intermediate
-python main.py essay.pdf --model phi3 --ollama-url http://localhost:11434/api/generate
+python main.py essay.pdf --model gemma4:e4b-mlx --ollama-url http://localhost:11434/api/generate
 ```
 
 **Live Camera Mode** — real-time analysis via webcam:
@@ -138,7 +138,7 @@ The annotated PDF preserves the original essay layout, with:
 - [PyMuPDF (fitz)](https://pymupdf.readthedocs.io/) — PDF rendering, text extraction, and annotation drawing
 - [EasyOCR](https://github.com/JaidedAI/EasyOCR) — GPU-accelerated OCR for scanned/handwritten text
 - [Ollama](https://ollama.com/) — Local LLM inference server
-- [Phi-3](https://azure.microsoft.com/en-us/products/phi-3/) — Small language model for grammar analysis
+- [gemma4:e4b-mlx](https://azure.microsoft.com/en-us/products/gemma4:e4b-mlx/) — Small language model for grammar analysis
 - [OpenCV](https://opencv.org/) — Camera access for live mode
 
 ### Cite
