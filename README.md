@@ -72,7 +72,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 Download from [ollama.com](https://ollama.com), then:
 
 ```bash
-ollama pull phi3
+ollama pull gemma4:e4b-mlx
 ollama serve
 ```
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 ```bash
 python main.py essay.pdf
 python main.py essay.pdf --output corrected.pdf --save-intermediate
-python main.py essay.pdf --model phi3 --ollama-url http://localhost:11434/api/generate
+python main.py essay.pdf --model gemma4:e4b-mlx --ollama-url http://localhost:11434/api/generate
 ```
 
 **Live Camera Mode** — real-time analysis via webcam:
