@@ -20,12 +20,14 @@ Processing flow:
 """
 
 import logging
+import threading
 import time
 from typing import Callable, Optional
 
 import numpy as np
 
 from camera import CameraSelector
+from ocr_engine import load_easyocr_reader
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +164,7 @@ class LiveModeController:
         self._detector = None
         self._ocr_reader = None
         self._capture = None
-        self._running = False
+        self._running = threading.Event()
         self._last_text = ""
         self._frame_count = 0
         logger.info("LiveModeController ready")
@@ -172,22 +174,9 @@ class LiveModeController:
         return CameraSelector.enumerate_devices()
 
     def _get_ocr_reader(self):
-        """Lazy load EasyOCR reader."""
-        if self._ocr_reader is not None:
-            return self._ocr_reader
-
-        import easyocr
-        import torch
-
-        gpu_ok = False
-        if self.use_gpu:
-            try:
-                gpu_ok = torch.cuda.is_available()
-            except Exception:
-                pass
-
-        self._ocr_reader = easyocr.Reader(['en'], gpu=gpu_ok)
-        logger.info(f"EasyOCR loaded for live mode → {'GPU' if gpu_ok else 'CPU'}")
+        """Lazy load EasyOCR reader (shared CUDA/MPS/CPU detection)."""
+        if self._ocr_reader is None:
+            self._ocr_reader = load_easyocr_reader(self.use_gpu)
         return self._ocr_reader
 
     def _extract_text_from_frame(self, frame) -> dict:
@@ -237,10 +226,10 @@ class LiveModeController:
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self._capture.set(cv2.CAP_PROP_FPS, 30)
 
-        self._running = True
+        self._running.set()
         logger.info(f"Camera {camera_id} opened - starting capture loop")
 
-        while self._running:
+        while self._running.is_set():
             ret, frame = self._capture.read()
             if not ret:
                 logger.error("Failed to read frame")
@@ -256,6 +245,17 @@ class LiveModeController:
             if sum(len(v) for v in ocr_words.values()) < 3:
                 continue
 
+            # Skip the (expensive) LLM call when the frame shows the same
+            # text as the previous one — pointing at a static page would
+            # otherwise re-analyse identical content every cycle.
+            frame_text = " ".join(
+                w["text"] for words in ocr_words.values() for w in words
+            )
+            if frame_text == self._last_text:
+                logger.debug("Frame text unchanged — skipping NLP")
+                continue
+            self._last_text = frame_text
+
             analysis_errors = []
             if nlp_engine is not None:
                 analysis_errors = nlp_engine.analyse(ocr_words)
@@ -265,9 +265,18 @@ class LiveModeController:
 
         self.stop()
 
+    def request_stop(self):
+        """Ask the capture loop to exit (thread-safe).
+
+        The loop thread releases the camera itself via stop() — callers on
+        other threads should use this instead of stop() to avoid releasing
+        the capture while a read is in flight.
+        """
+        self._running.clear()
+
     def stop(self):
         """Stop camera capture and release resources."""
-        self._running = False
+        self._running.clear()
         if self._capture is not None:
             self._capture.release()
             self._capture = None

@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from ocr_engine import OCREngine
-from nlp_engine  import NLPEngine
+from nlp_engine  import NLPEngine, MODEL_NAME, OLLAMA_URL
 from annotator   import Annotator
 from live_camera import LiveModeController
 from camera    import camera_selector
@@ -36,18 +36,23 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="AI English Essay Corrector — hybrid OCR + Phi-3 grammar analysis"
     )
-    p.add_argument("input_pdf",
-                   help="Path to the essay PDF (digital or scanned/handwritten)")
+    p.add_argument("input_pdf", nargs="?",
+                   help="Path to the essay PDF (digital or scanned/handwritten). "
+                        "Not required with --live.")
     p.add_argument("--output",  "-o",
                    help="Output annotated PDF (default: <input>_annotated.pdf)")
     p.add_argument("--no-gpu",  action="store_true",
                    help="Disable GPU; force CPU for EasyOCR")
+    p.add_argument("--no-spell-correct", action="store_true",
+                   help="Keep raw OCR words (no auto spell-correction) so the "
+                        "LLM can flag genuine spelling errors in scanned essays")
     p.add_argument("--save-intermediate", action="store_true",
                    help="Also save _ocr.json and _errors.json alongside output")
-    p.add_argument("--model",   default="phi3",
-                   help="Ollama model name (default: phi3)")
-    p.add_argument("--ollama-url", default="http://localhost:11434/api/generate",
-                   help="Ollama endpoint URL")
+    p.add_argument("--model",   default=MODEL_NAME,
+                   help=f"Ollama model name (default: {MODEL_NAME}, "
+                        "override with env OLLAMA_MODEL)")
+    p.add_argument("--ollama-url", default=OLLAMA_URL,
+                   help="Ollama endpoint URL (override with env OLLAMA_URL)")
     p.add_argument("--live", action="store_true",
                    help="Enable live camera mode for real-time essay analysis")
     p.add_argument("--camera", type=int, default=0,
@@ -57,6 +62,9 @@ def parse_args() -> argparse.Namespace:
 
 def run_pipeline(args: argparse.Namespace) -> str:
     t0 = time.time()
+    if not args.input_pdf:
+        logger.error("No input PDF given.  Usage: python main.py essay.pdf")
+        sys.exit(1)
     inp = Path(args.input_pdf)
     if not inp.exists():
         logger.error(f"File not found: {inp}")
@@ -67,7 +75,8 @@ def run_pipeline(args: argparse.Namespace) -> str:
     # ── Step 1: OCR ───────────────────────────────────────────────────────────
     logger.info("━━━ Step 1/3 — OCR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     logger.info("  Digital PDF → PyMuPDF  |  Scanned/Handwritten → EasyOCR")
-    ocr = OCREngine(use_gpu=not args.no_gpu)
+    ocr = OCREngine(use_gpu=not args.no_gpu,
+                    spell_correct=not args.no_spell_correct)
     t1 = time.time()
     ocr_words = ocr.process_pdf(str(inp))
     total_words = sum(len(v) for v in ocr_words.values())
@@ -131,14 +140,6 @@ def run_pipeline(args: argparse.Namespace) -> str:
     return result
 
 
-if __name__ == "__main__":
-    args = parse_args()
-    if args.live:
-        run_live_mode(args)
-    else:
-        run_pipeline(args)
-
-
 def run_live_mode(args: argparse.Namespace) -> None:
     """Run live camera mode for real-time essay analysis."""
     t0 = time.time()
@@ -175,3 +176,11 @@ def run_live_mode(args: argparse.Namespace) -> None:
     finally:
         elapsed = time.time() - t0
         logger.info(f"━━━ Live mode ended in {elapsed:.1f}s ━━━━━━━━━━━━━━━━━━━")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    if args.live:
+        run_live_mode(args)
+    else:
+        run_pipeline(args)

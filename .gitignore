@@ -1,24 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Tooling
 .spectra/
 .opencode/
 .agent/
-__pycache__/
-openspec/.vector-search.db*
-openspec
-sampleREADME.md
-pdfs_annotated.zip
-.DS_Store
+openspec/
 docs/
-pdfs/English education activity design journal.pdf
-pdfs/2_annotated.pdf
-.gitignore
-pdfs/2_ocr.json
-.pdf
-pdfs_annotated/test1_annotated.pdf
-.gitignore
-pdfs/2.pdf
-.gitignore
-pdfs_annotated/2_annotated.pdf
-.gitignore
-pdfs_annotated/English education activity design journal_annotated.pdf
-.gitignore
-pdfs/2_errors.json
+
+# Large media (demo recordings)
+*.mov
+
+# Generated outputs
+pdfs_annotated*/
+pdfs_annotated.zip
+pretest_posttest_output/
+*_annotated.pdf
+*_ocr.json
+*_errors.json
+
+# Misc
+sampleREADME.md
