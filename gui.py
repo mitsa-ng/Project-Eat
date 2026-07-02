@@ -53,6 +53,8 @@ _HERE = Path(__file__).parent.resolve()
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from nlp_engine import MODEL_NAME as DEFAULT_MODEL, OLLAMA_URL as DEFAULT_URL
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Colour palette
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -112,6 +114,7 @@ class App(tk.Tk):
 
         self._running    = False
         self._live_running = False
+        self._live_controller = None
         self._zip_path   = ""
         self._pdf_list   = []      # list of Path objects in selected folder
 
@@ -268,19 +271,19 @@ class App(tk.Tk):
 
         ttk.Label(cfg, text="Model", style="Muted.TLabel").grid(
             row=0, column=0, sticky="w", padx=(0, 8), pady=6)
-        self._model_var = tk.StringVar(value="gemma4:e4b-mlx")
+        self._model_var = tk.StringVar(value=DEFAULT_MODEL)
         ttk.Entry(cfg, textvariable=self._model_var, width=14).grid(
             row=0, column=1, sticky="w", padx=(0, 18), pady=6)
 
         ttk.Label(cfg, text="LLM API URL", style="Muted.TLabel").grid(
             row=0, column=2, sticky="w", padx=(0, 8), pady=6)
-        self._url_var = tk.StringVar(
-            value="http://localhost:11434/api/generate")
+        self._url_var = tk.StringVar(value=DEFAULT_URL)
         ttk.Entry(cfg, textvariable=self._url_var, width=38).grid(
             row=0, column=3, sticky="ew", pady=6)
 
-        self._gpu_var  = tk.BooleanVar(value=True)
-        self._json_var = tk.BooleanVar(value=False)
+        self._gpu_var   = tk.BooleanVar(value=True)
+        self._json_var  = tk.BooleanVar(value=False)
+        self._spell_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(cfg, text="Use GPU  (EasyOCR)",
                          variable=self._gpu_var).grid(
             row=1, column=0, columnspan=2, sticky="w",
@@ -289,6 +292,12 @@ class App(tk.Tk):
                          text="Include intermediate JSON files in ZIP",
                          variable=self._json_var).grid(
             row=1, column=2, columnspan=2, sticky="w",
+            pady=(4, 0))
+        ttk.Checkbutton(cfg,
+                         text="Auto spell-correct OCR words  (may hide real "
+                              "spelling errors in scanned essays)",
+                         variable=self._spell_var).grid(
+            row=2, column=0, columnspan=4, sticky="w",
             pady=(4, 0))
 
 # ── run button + status ───────────────────────────────────────────────
@@ -529,9 +538,10 @@ class App(tk.Tk):
             return
 
         use_gpu = self._gpu_var.get()
-        model = self._model_var.get().strip() or "phi3"
+        model = self._model_var.get().strip() or DEFAULT_MODEL
         url = self._url_var.get().strip()
         save_json = self._json_var.get()
+        spell_correct = self._spell_var.get()
         pdfs = list(self._pdf_list)
 
         # reset UI
@@ -550,15 +560,19 @@ class App(tk.Tk):
 
         threading.Thread(
             target=self._run_batch,
-            args=(pdfs, zip_out, use_gpu, model, url, save_json),
+            args=(pdfs, zip_out, use_gpu, model, url, save_json,
+                  spell_correct),
             daemon=True,
         ).start()
 
-    def _run_batch(self, pdfs, zip_out, use_gpu, model, url, save_json):
+    def _run_batch(self, pdfs, zip_out, use_gpu, model, url, save_json,
+                   spell_correct):
         t0 = time.time()
         log = logging.getLogger("gui")
 
         try:
+            from concurrent.futures import ThreadPoolExecutor
+
             from ocr_engine import OCREngine
             from nlp_engine  import NLPEngine
             from annotator   import Annotator
@@ -568,67 +582,91 @@ class App(tk.Tk):
             # Initialise engines once (avoid reloading model per file)
             self._set_overall("Initialising engines…", 0)
             self._set_step("", 0)
-            ocr = OCREngine(use_gpu=use_gpu)
+            ocr = OCREngine(use_gpu=use_gpu, spell_correct=spell_correct)
             nlp = NLPEngine(model=model, ollama_url=url)
             ann = Annotator()
 
-            succeeded, failed = 0, 0
-            all_errors = 0
+            # Two files run in flight: while file N waits on Ollama, file N+1
+            # runs OCR.  PyMuPDF and the EasyOCR reader are not thread-safe,
+            # so every fitz/OCR stage is serialised behind one lock; Ollama
+            # requests queue server-side on their own.
+            fitz_lock  = threading.Lock()
+            state_lock = threading.Lock()
+            done_count = [0]
+            stats      = {"succeeded": 0, "failed": 0, "all_errors": 0}
+
+            def _process_one(pdf_path, tmp):
+                name = pdf_path.name
+                self._update_row(name, None, "Processing...", "active")
+                log.info(f"━━━ {name} ━━━")
+                try:
+                    # Step 1 — OCR
+                    self._set_step(f"{name} — Step 1/3 OCR…", 5)
+                    with fitz_lock:
+                        ocr_words = ocr.process_pdf(str(pdf_path))
+                    total_w = sum(len(v) for v in ocr_words.values())
+                    self._set_step(
+                        f"{name} — Step 1/3 OCR done  ({total_w} words)", 33)
+
+                    if total_w == 0:
+                        raise ValueError("OCR found 0 words")
+
+                    # Step 2 — NLP
+                    self._set_step(f"{name} — Step 2/3 Grammar analysis…", 38)
+                    errors = nlp.analyse(ocr_words)
+                    self._set_step(
+                        f"{name} — Step 2/3 {len(errors)} error(s) found", 66)
+
+                    # Step 3 — Annotate
+                    self._set_step(f"{name} — Step 3/3 Annotating PDF…", 70)
+                    out_pdf = str(tmp / (pdf_path.stem + "_annotated.pdf"))
+                    with fitz_lock:
+                        ann.annotate_pdf(str(pdf_path), ocr_words,
+                                         errors, out_pdf)
+                    self._set_step(f"{name} — Step 3/3 Done", 100)
+
+                    # Optional JSON files
+                    if save_json:
+                        ocr_f = tmp / (pdf_path.stem + "_ocr.json")
+                        err_f = tmp / (pdf_path.stem + "_errors.json")
+                        ocr_f.write_text(
+                            json.dumps(ocr_words, ensure_ascii=False,
+                                       indent=2), encoding="utf-8")
+                        err_f.write_text(
+                            json.dumps(errors, ensure_ascii=False,
+                                       indent=2), encoding="utf-8")
+
+                    self._update_row(name, errors, "Done", "done")
+                    with state_lock:
+                        stats["succeeded"]  += 1
+                        stats["all_errors"] += len(errors)
+
+                except Exception as e:
+                    log.error(f"  {name} failed: {e}", exc_info=False)
+                    self._update_row(name, None, f"Failed: {e}", "error")
+                    with state_lock:
+                        stats["failed"] += 1
+                finally:
+                    with state_lock:
+                        done_count[0] += 1
+                        done = done_count[0]
+                    self._set_overall(
+                        f"Completed {done}/{total} file(s)",
+                        int(done / total * 100))
 
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp = Path(tmp_dir)
 
-                for idx, pdf_path in enumerate(pdfs):
-                    name = pdf_path.name
-                    file_pct = int(idx / total * 100)
-                    self._set_overall(
-                        f"File {idx+1}/{total} — {name}", file_pct)
-                    self._update_row(name, None, "Processing...", "active")
-                    log.info(f"━━━ [{idx+1}/{total}] {name} ━━━")
+                self._set_overall(f"Processing {total} file(s)…", 0)
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(_process_one, p, tmp)
+                               for p in pdfs]
+                    for fut in futures:
+                        fut.result()
 
-                    try:
-                        # Step 1 — OCR
-                        self._set_step("Step 1/3 — OCR…", 5)
-                        ocr_words = ocr.process_pdf(str(pdf_path))
-                        total_w   = sum(len(v) for v in ocr_words.values())
-                        self._set_step(
-                            f"Step 1/3 — OCR done  ({total_w} words)", 33)
-
-                        if total_w == 0:
-                            raise ValueError("OCR found 0 words")
-
-                        # Step 2 — NLP
-                        self._set_step("Step 2/3 — Grammar analysis…", 38)
-                        errors = nlp.analyse(ocr_words)
-                        self._set_step(
-                            f"Step 2/3 — {len(errors)} error(s) found", 66)
-
-                        # Step 3 — Annotate
-                        self._set_step("Step 3/3 — Annotating PDF…", 70)
-                        out_pdf = str(tmp / (pdf_path.stem + "_annotated.pdf"))
-                        ann.annotate_pdf(str(pdf_path), ocr_words,
-                                         errors, out_pdf)
-                        self._set_step("Step 3/3 — Done", 100)
-
-                        # Optional JSON files
-                        if save_json:
-                            ocr_f = tmp / (pdf_path.stem + "_ocr.json")
-                            err_f = tmp / (pdf_path.stem + "_errors.json")
-                            ocr_f.write_text(
-                                json.dumps(ocr_words, ensure_ascii=False,
-                                           indent=2), encoding="utf-8")
-                            err_f.write_text(
-                                json.dumps(errors, ensure_ascii=False,
-                                           indent=2), encoding="utf-8")
-
-                        self._update_row(name, errors, "Done", "done")
-                        all_errors += len(errors)
-                        succeeded  += 1
-
-                    except Exception as e:
-                        log.error(f"  {name} failed: {e}", exc_info=False)
-                        self._update_row(name, None, f"Failed: {e}", "error")
-                        failed += 1
+                succeeded  = stats["succeeded"]
+                failed     = stats["failed"]
+                all_errors = stats["all_errors"]
 
                 # Pack everything into ZIP
                 self._set_overall("Packing ZIP…", 99)
@@ -779,6 +817,7 @@ class App(tk.Tk):
 
         nlp = NLPEngine(model=model, ollama_url=url)
         controller = LiveModeController(use_gpu=use_gpu)
+        self._live_controller = controller
 
         try:
             controller.start(camera_id=camera_id, callback=callback, nlp_engine=nlp)
@@ -793,6 +832,7 @@ class App(tk.Tk):
             self.after(0, _append_error)
         finally:
             self._live_running = False
+            self._live_controller = None
             self.after(0, lambda: self._run_btn.config(state="normal"))
             self.after(0, lambda: self._stop_live_btn.config(state="disabled"))
             self._set_status("Live mode stopped", "Success.TLabel")
@@ -800,6 +840,9 @@ class App(tk.Tk):
     def _stop_live_mode(self):
         """Stop live mode capture."""
         self._live_running = False
+        controller = getattr(self, "_live_controller", None)
+        if controller is not None:
+            controller.request_stop()
         self._stop_live_btn.config(state="disabled")
         self._set_status("Stopping live mode...", "Warn.TLabel")
         self._log_text.configure(state="normal")

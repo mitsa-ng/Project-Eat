@@ -22,15 +22,17 @@ Output format:
 
 import json
 import logging
+import os
 import re
+import time
 import requests
 from typing import Union
 
 logger = logging.getLogger(__name__)
 
 # ── Ollama / Phi-3 config ─────────────────────────────────────────────────────
-OLLAMA_URL   = "http://localhost:11434/api/generate"
-MODEL_NAME   = "phi3"
+OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+MODEL_NAME   = os.getenv("OLLAMA_MODEL", "phi3")
 TEMPERATURE  = 0.0
 MAX_TOKENS   = 4096
 CHUNK_WORDS  = 200     # split essays longer than this many words into chunks
@@ -113,8 +115,10 @@ class NLPEngine:
     # ── Ollama call ───────────────────────────────────────────────────────────
 
     def _call_ollama(self, text: str, chunk_index: int = 0, total_chunks: int = 0) -> str:
-        """POST to Ollama /api/generate, return raw response string."""
-        import time as _time
+        """POST to Ollama /api/generate, return raw response string.
+
+        Retries once on transient failures (5xx / dropped connection).
+        """
         word_count = len(text.split())
         logger.info(
             f"  Calling Ollama chunk {chunk_index}/{total_chunks} "
@@ -130,29 +134,58 @@ class NLPEngine:
                 "num_predict": MAX_TOKENS,
             },
         }
-        t0 = _time.time()
-        try:
-            resp = requests.post(self.ollama_url, json=payload, timeout=600)
-            resp.raise_for_status()
-        except requests.exceptions.ConnectionError:
-            raise RuntimeError(
-                "Cannot reach Ollama.  Start it first:  ollama serve\n"
-                "Then pull the model:                   ollama pull phi3"
-            )
-        except requests.exceptions.ReadTimeout:
-            elapsed = _time.time() - t0
-            logger.error(
-                f"  Ollama read timeout after {elapsed:.0f}s "
-                f"(chunk {chunk_index}/{total_chunks}, {word_count} words).\n"
-                f"  Try: restart Ollama with 'ollama serve' or use a smaller model."
-            )
-            raise
 
-        elapsed = _time.time() - t0
-        data = resp.json()
-        raw = data.get("response", "")
-        logger.info(f"  Ollama responded in {elapsed:.1f}s  ({len(raw)} chars)")
-        return raw
+        last_exc = None
+        for attempt in (1, 2):
+            t0 = time.time()
+            try:
+                resp = requests.post(self.ollama_url, json=payload, timeout=600)
+            except requests.exceptions.ConnectionError as exc:
+                if attempt == 1:
+                    logger.warning("  Ollama connection dropped — retrying in 2s …")
+                    last_exc = exc
+                    time.sleep(2)
+                    continue
+                raise RuntimeError(
+                    "Cannot reach Ollama.  Start it first:  ollama serve\n"
+                    f"Then pull the model:                   ollama pull {self.model}"
+                )
+            except requests.exceptions.ReadTimeout:
+                elapsed = time.time() - t0
+                logger.error(
+                    f"  Ollama read timeout after {elapsed:.0f}s "
+                    f"(chunk {chunk_index}/{total_chunks}, {word_count} words).\n"
+                    f"  Try: restart Ollama with 'ollama serve' or use a smaller model."
+                )
+                raise
+
+            if resp.status_code == 404:
+                raise RuntimeError(
+                    f"Ollama model {self.model!r} not found.  "
+                    f"Pull it first:  ollama pull {self.model}"
+                )
+            if resp.status_code >= 500 and attempt == 1:
+                logger.warning(
+                    f"  Ollama server error {resp.status_code} — retrying in 2s …"
+                )
+                time.sleep(2)
+                continue
+            resp.raise_for_status()
+
+            elapsed = time.time() - t0
+            try:
+                data = resp.json()
+            except ValueError:
+                logger.error(
+                    f"  Ollama returned non-JSON response "
+                    f"({len(resp.text)} chars) — skipping chunk."
+                )
+                return ""
+            raw = data.get("response", "")
+            logger.info(f"  Ollama responded in {elapsed:.1f}s  ({len(raw)} chars)")
+            return raw
+
+        raise RuntimeError(f"Ollama request failed after retry: {last_exc}")
 
     # ── fault-tolerant JSON parser ────────────────────────────────────────────
 
@@ -374,15 +407,33 @@ class NLPEngine:
     def analyse(self, ocr_words: Union[list, dict]) -> list:
         """
         Proofread from OCREngine output.
-        Converts word dicts to plain text then calls analyse_text().
+
+        Dict input (page → words) is analysed page by page and each error is
+        tagged with its page number, so the annotator only marks the page the
+        error was actually found on — the same words used correctly on
+        another page stay untouched.
         """
-        text = self._words_to_text(ocr_words)
-        if not text.strip():
+        if isinstance(ocr_words, list):
+            return self.analyse_text(self._words_to_text(ocr_words))
+
+        pages = {pg: self._words_to_text(ocr_words[pg]).strip()
+                 for pg in sorted(ocr_words.keys())}
+        if not any(pages.values()):
             logger.warning("Empty OCR text — nothing to analyse.")
             return []
-        word_count = len(text.split())
-        logger.info(f"Analysing {word_count} words from OCR output …")
-        return self.analyse_text(text)
+
+        all_errors = []
+        for pg, page_text in pages.items():
+            if not page_text:
+                continue
+            logger.info(
+                f"Analysing page {pg + 1}  ({len(page_text.split())} words) …"
+            )
+            errors = self.analyse_text(page_text)
+            for e in errors:
+                e["page"] = pg
+            all_errors.extend(errors)
+        return all_errors
 
 
 # ── CLI smoke-test ────────────────────────────────────────────────────────────

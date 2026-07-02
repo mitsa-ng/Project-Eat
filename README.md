@@ -17,7 +17,7 @@
 <img src="https://badgen.net/badge/platform/macOS%20%7C%20Windows%20%7C%20Linux/cyan" alt="platform" />
 </a>
 <a href="#" target="_blank">
-<img src="https://badgen.net/badge/LLM/gemma4:e4b-mlx/orange" alt="LLM" />
+<img src="https://badgen.net/badge/LLM/Ollama%20(phi3)/orange" alt="LLM" />
 </a>
 </p>
 
@@ -29,7 +29,7 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 
 🌟 **Hybrid OCR Engine** — Automatically detects page type and selects the optimal extraction strategy: PyMuPDF for digital PDFs (instant, pixel-perfect) and EasyOCR with optional CUDA acceleration for scanned or handwritten pages.
 
-🌟 **LLM-Powered Error Detection** — Leverages gemma4:e4b-mlx (via Ollama) with a structured few-shot prompt to identify spelling, grammar, and semantic errors. Long essays are chunked to avoid context-window overflow; results are deduplicated and validated.
+🌟 **LLM-Powered Error Detection** — Leverages a local LLM via Ollama (default: phi3, configurable with `--model` or the `OLLAMA_MODEL` env var) with a structured few-shot prompt to identify spelling, grammar, and semantic errors. Long essays are chunked to avoid context-window overflow; results are deduplicated and validated.
 
 🌟 **Sidebar Annotation Model** — Errors are highlighted in the body text with color-coded underlines (red for spelling, orange for grammar, blue for semantic). Correction tags are placed in a reserved right-side column with leader lines, ensuring no overlap with the original essay text.
 
@@ -42,8 +42,8 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  OCREngine   │ ──→ │  NLPEngine   │ ──→ │  Annotator   │
-│  (PyMuPDF /  │     │  (gemma4:e4b │     │  (fitz shape │
-│   EasyOCR)   │     │   Ollama)    │     │   drawing)   │
+│  (PyMuPDF /  │     │  (Ollama LLM │     │  (fitz shape │
+│   EasyOCR)   │     │   e.g. phi3) │     │   drawing)   │
 └──────────────┘     └──────────────┘     └──────────────┘
        │                     │                     │
        ▼                     ▼                     ▼
@@ -55,7 +55,9 @@ A fully automated pipeline for detecting spelling, grammar, and semantic errors 
 
 ### Installation
 
-#### 1. Install CUDA-Enabled PyTorch (Recommended)
+#### 1. Install PyTorch (GPU recommended)
+
+**Windows/Linux with NVIDIA GPU** — install the CUDA-enabled wheel:
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
@@ -67,14 +69,26 @@ python -c "import torch; print(torch.cuda.is_available())"
 # Expected: True
 ```
 
-#### 2. Install Ollama and Pull gemma4:e4b-mlx
+**macOS (Apple Silicon)** — the standard wheel already includes MPS support, which the OCR engine auto-detects:
+
+```bash
+pip install torch torchvision
+python -c "import torch; print(torch.backends.mps.is_available())"
+# Expected: True
+```
+
+#### 2. Install Ollama and Pull a Model
 
 Download from [ollama.com](https://ollama.com), then:
 
 ```bash
-ollama pull gemma4:e4b-mlx
+ollama pull phi3
 ollama serve
 ```
+
+Any Ollama model works — select it with `--model` (CLI), the Model field (GUI), or the `OLLAMA_MODEL` environment variable.
+
+> **Model size matters.** Very small models (e.g. phi3-mini) tend to parrot the few-shot examples instead of analysing the actual essay, so most of their output is filtered out as hallucination and few real errors survive. A mid-size model (~9B, e.g. gemma4:e4b-mlx) detects substantially more genuine errors at the cost of slower inference.
 
 #### 3. Install Dependencies
 
@@ -91,7 +105,8 @@ pip install -r requirements.txt
 ```bash
 python main.py essay.pdf
 python main.py essay.pdf --output corrected.pdf --save-intermediate
-python main.py essay.pdf --model gemma4:e4b-mlx --ollama-url http://localhost:11434/api/generate
+python main.py essay.pdf --model phi3 --ollama-url http://localhost:11434/api/generate
+python main.py essay.pdf --no-spell-correct   # keep raw OCR words so the LLM sees real misspellings
 ```
 
 **Live Camera Mode** — real-time analysis via webcam:
@@ -119,11 +134,13 @@ The annotated PDF preserves the original essay layout, with:
 
 ### Important Notes
 
-1. **Ollama must be running** (`http://localhost:11434`) for NLP analysis. If the server is unreachable, the pipeline will exit with a connection error.
+1. **Ollama must be running** (`http://localhost:11434`) for NLP analysis. If the server is unreachable, the pipeline will exit with a connection error. Defaults can be overridden with the `OLLAMA_MODEL` and `OLLAMA_URL` environment variables.
 
-2. **CUDA vs CPU**: Without the CUDA-enabled PyTorch wheel, EasyOCR falls back to CPU, which is substantially slower for scanned/handwritten pages.
+2. **GPU vs CPU**: EasyOCR auto-detects CUDA (NVIDIA) or MPS (Apple Silicon) and falls back to CPU, which is substantially slower for scanned/handwritten pages.
 
 3. **OCR quality**: For best results, provide clean scans at ≥200 DPI. Low-resolution or heavily distorted images may yield garbled text.
+
+4. **Spell-correction trade-off**: By default, OCR output from scanned/handwritten pages is auto-corrected to remove OCR noise — which can also erase the student's genuine misspellings before analysis. Use `--no-spell-correct` (CLI) or untick the checkbox (GUI) to keep raw OCR words.
 
 ### Error Types
 
@@ -138,7 +155,7 @@ The annotated PDF preserves the original essay layout, with:
 - [PyMuPDF (fitz)](https://pymupdf.readthedocs.io/) — PDF rendering, text extraction, and annotation drawing
 - [EasyOCR](https://github.com/JaidedAI/EasyOCR) — GPU-accelerated OCR for scanned/handwritten text
 - [Ollama](https://ollama.com/) — Local LLM inference server
-- [gemma4:e4b-mlx](https://azure.microsoft.com/en-us/products/gemma4:e4b-mlx/) — Small language model for grammar analysis
+- [Phi-3](https://ollama.com/library/phi3) — Default small language model for grammar analysis
 - [OpenCV](https://opencv.org/) — Camera access for live mode
 
 ### Cite

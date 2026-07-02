@@ -24,13 +24,58 @@ All coordinates are in PDF point-space (origin = top-left, 1 pt = 1/72 inch).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import cv2
 import fitz  # PyMuPDF ≥ 1.23
 import logging
 import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# ── GPU device detection (shared with live_camera) ───────────────────────────
+
+def detect_easyocr_device(use_gpu: bool = True):
+    """
+    Pick the best device flag for easyocr.Reader(gpu=...).
+
+    Returns True (CUDA), 'mps' (Apple Silicon), or False (CPU).
+    easyocr accepts a device string, so 'mps' is passed through to torch.
+    """
+    if not use_gpu:
+        return False
+    try:
+        import torch
+    except ImportError:
+        logger.warning("  PyTorch not found — EasyOCR will run on CPU.")
+        return False
+    if torch.cuda.is_available():
+        logger.info(f"  CUDA device: {torch.cuda.get_device_name(0)}")
+        return True
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        logger.info("  Apple Silicon MPS device available")
+        return "mps"
+    logger.warning("  No CUDA/MPS device — EasyOCR will run on CPU.")
+    return False
+
+
+def load_easyocr_reader(use_gpu: bool = True):
+    """
+    Create an easyocr.Reader on the best available device.
+    Falls back to CPU if GPU/MPS initialisation fails.
+    """
+    import easyocr
+
+    device = detect_easyocr_device(use_gpu)
+    if device:
+        try:
+            reader = easyocr.Reader(['en'], gpu=device)
+            logger.info(f"EasyOCR loaded  → {'GPU' if device is True else device.upper()}")
+            return reader
+        except Exception as exc:
+            logger.warning(f"  EasyOCR failed on {device!r} ({exc}) — falling back to CPU")
+    reader = easyocr.Reader(['en'], gpu=False)
+    logger.info("EasyOCR loaded  → CPU")
+    return reader
+
 
 # ── lazy spell-check loader ─────────────────────────────────────────────────────
 _SPELL_CHECKER = None
@@ -92,51 +137,18 @@ class OCREngine:
         # ocr_words[0] → [{text, box}, ...]  for page 0
     """
 
-    def __init__(self, use_gpu: bool = USE_GPU):
-        self.use_gpu = use_gpu
+    def __init__(self, use_gpu: bool = USE_GPU, spell_correct: bool = True):
+        self.use_gpu       = use_gpu
+        self.spell_correct = spell_correct
         self._reader = None   # EasyOCR reader, loaded on first scanned/HW page
         logger.info("OCREngine ready  (auto-detect: digital=PyMuPDF | scan/HW=EasyOCR)")
 
     # ── lazy EasyOCR loader ───────────────────────────────────────────────────
 
     def _get_reader(self):
-        """
-        Load EasyOCR once.
-
-        CUDA detection order:
-          1. Check torch.cuda.is_available() at runtime (respects the actual
-             installed torch+CUDA wheel, not just the presence of a GPU).
-          2. If unavailable → warn and fall back to CPU.
-
-        FIX for "Neither CUDA nor MPS are available":
-          Install the CUDA-enabled wheel first:
-            pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-          then re-run.  No code change needed — this function auto-detects.
-        """
-        if self._reader is not None:
-            return self._reader
-
-        import easyocr
-
-        gpu_ok = False
-        if self.use_gpu:
-            try:
-                import torch
-                gpu_ok = torch.cuda.is_available()
-                if gpu_ok:
-                    logger.info(f"  CUDA device: {torch.cuda.get_device_name(0)}")
-                else:
-                    logger.warning(
-                        "  torch.cuda.is_available() = False.  "
-                        "Install CUDA-enabled PyTorch:\n"
-                        "  pip install torch torchvision "
-                        "--index-url https://download.pytorch.org/whl/cu118"
-                    )
-            except ImportError:
-                logger.warning("  PyTorch not found — EasyOCR will run on CPU.")
-
-        self._reader = easyocr.Reader(['en'], gpu=gpu_ok)
-        logger.info(f"EasyOCR loaded  → {'GPU' if gpu_ok else 'CPU'}")
+        """Load EasyOCR once, on the best available device (CUDA/MPS/CPU)."""
+        if self._reader is None:
+            self._reader = load_easyocr_reader(self.use_gpu)
         return self._reader
 
     # ── digital extraction (PyMuPDF) ──────────────────────────────────────────
@@ -173,6 +185,8 @@ class OCREngine:
         img    = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         arr    = np.array(img)
 
+        import cv2
+
         gray    = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
         arr     = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -183,12 +197,22 @@ class OCREngine:
         scale_x      = page.rect.width  / w_img
         scale_y      = page.rect.height / h_img
 
-        reader  = self._get_reader()
-        results = reader.readtext(
-            arr, detail=1, paragraph=False,
-            text_threshold=EASYOCR_TEXT_THRESHOLD,
-            canvas_size=EASYOCR_CANVAS_SIZE,
-        )
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(
+                arr, detail=1, paragraph=False,
+                text_threshold=EASYOCR_TEXT_THRESHOLD,
+                canvas_size=EASYOCR_CANVAS_SIZE,
+            )
+        except RuntimeError as exc:
+            # MPS ops occasionally fail at inference time — retry once on CPU
+            logger.warning(f"  EasyOCR inference failed ({exc}) — retrying on CPU")
+            self._reader = load_easyocr_reader(use_gpu=False)
+            results = self._reader.readtext(
+                arr, detail=1, paragraph=False,
+                text_threshold=EASYOCR_TEXT_THRESHOLD,
+                canvas_size=EASYOCR_CANVAS_SIZE,
+            )
 
         words = []
         for (raw_box, text, conf) in results:
@@ -198,7 +222,16 @@ class OCREngine:
             box = [[pt[0] * scale_x, pt[1] * scale_y] for pt in raw_box]
             words.append({"text": text, "box": box})
 
-        # spell-check post-processing — filter / correct OCR garbage
+        # spell-check post-processing — filter / correct OCR garbage.
+        # Optional: correcting here also erases genuine spelling errors the
+        # LLM is supposed to flag, so callers can disable it (spell_correct=False).
+        if not self.spell_correct:
+            logger.debug(
+                f"  EasyOCR: {len(words)} words (spell-correction disabled, "
+                f"conf ≥ {CONFIDENCE_THRESHOLD})"
+            )
+            return words
+
         cleaned = []
         for w in words:
             corrected = _spell_correct_word(w["text"])

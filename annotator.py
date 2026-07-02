@@ -332,7 +332,12 @@ class Annotator:
             logger.info(f"Annotating page {page_num + 1}/{len(doc)} …")
             self._draw_sidebar_divider(page)
             self._draw_legend(page)
-            total += self._annotate_page(page, ocr_words.get(page_num, []), errors)
+            # Page-tagged errors are only matched on their own page; errors
+            # without a page (older JSON, plain-text analysis) match anywhere.
+            page_errors = [e for e in errors
+                           if e.get("page") is None or e["page"] == page_num]
+            total += self._annotate_page(page, ocr_words.get(page_num, []),
+                                         page_errors)
 
         doc.save(output_pdf, garbage=4, deflate=True)
         doc.close()
