@@ -88,6 +88,8 @@ ollama serve
 
 Any Ollama model works — select it with `--model` (CLI), the Model field (GUI), or the `OLLAMA_MODEL` environment variable.
 
+> **Model size matters.** Very small models (e.g. phi3-mini) tend to parrot the few-shot examples instead of analysing the actual essay, so most of their output is filtered out as hallucination and few real errors survive. A mid-size model (~9B, e.g. gemma4:e4b-mlx) detects substantially more genuine errors at the cost of slower inference.
+
 #### 3. Install Dependencies
 
 ```bash
