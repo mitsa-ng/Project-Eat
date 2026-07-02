@@ -110,8 +110,9 @@ def run_pipeline(args: argparse.Namespace) -> str:
         )
     else:
         for i, e in enumerate(errors, 1):
+            pg = f"p{e['page'] + 1} " if e.get("page") is not None else ""
             logger.info(
-                f"  {i:3d}. [{e['type']:8s}] "
+                f"  {i:3d}. {pg}[{e['type']:8s}] "
                 f"{e['original']!r:35s} → {e['suggestion']!r}"
             )
 

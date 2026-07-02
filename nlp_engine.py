@@ -407,15 +407,33 @@ class NLPEngine:
     def analyse(self, ocr_words: Union[list, dict]) -> list:
         """
         Proofread from OCREngine output.
-        Converts word dicts to plain text then calls analyse_text().
+
+        Dict input (page → words) is analysed page by page and each error is
+        tagged with its page number, so the annotator only marks the page the
+        error was actually found on — the same words used correctly on
+        another page stay untouched.
         """
-        text = self._words_to_text(ocr_words)
-        if not text.strip():
+        if isinstance(ocr_words, list):
+            return self.analyse_text(self._words_to_text(ocr_words))
+
+        pages = {pg: self._words_to_text(ocr_words[pg]).strip()
+                 for pg in sorted(ocr_words.keys())}
+        if not any(pages.values()):
             logger.warning("Empty OCR text — nothing to analyse.")
             return []
-        word_count = len(text.split())
-        logger.info(f"Analysing {word_count} words from OCR output …")
-        return self.analyse_text(text)
+
+        all_errors = []
+        for pg, page_text in pages.items():
+            if not page_text:
+                continue
+            logger.info(
+                f"Analysing page {pg + 1}  ({len(page_text.split())} words) …"
+            )
+            errors = self.analyse_text(page_text)
+            for e in errors:
+                e["page"] = pg
+            all_errors.extend(errors)
+        return all_errors
 
 
 # ── CLI smoke-test ────────────────────────────────────────────────────────────
