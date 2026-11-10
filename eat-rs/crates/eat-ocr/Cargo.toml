@@ -1,0 +1,14 @@
+[package]
+name = "eat-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eat-core = { path = "../eat-core" }
+ort = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

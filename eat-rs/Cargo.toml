@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/eat-core", "crates/eat-pdf", "crates/eat-cli"]
+members = ["crates/eat-core", "crates/eat-pdf", "crates/eat-ocr", "crates/eat-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,7 +12,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
+ort = "2.0.0-rc.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.release]
-lto = true
+lto = false
 strip = true

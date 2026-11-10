@@ -15,6 +15,8 @@ use eat_core::languages::LANGUAGES;
 use eat_core::logging;
 use eat_core::nlp::{default_language, default_model_name, default_ollama_url, NlpEngine};
 use eat_core::words::Word;
+use eat_ocr::imgops::Img;
+use eat_ocr::RapidOcr;
 use eat_pdf::{Annotator, EatPdf};
 
 #[derive(Parser, Debug)]
@@ -96,6 +98,13 @@ fn sanitize_output_path(output: &str, input_dir: &Path) -> Result<PathBuf, Pipel
             }
             acc
         });
+    // resolve symlinks via the (existing) parent, like Python's Path.resolve()
+    let resolved = if let (Some(parent), Some(name)) = (resolved.parent(), resolved.file_name()) {
+        let cp = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+        cp.join(name)
+    } else {
+        resolved
+    };
     let input_resolved = input_dir.canonicalize().unwrap_or_else(|_| {
         std::env::current_dir()
             .unwrap_or_default()
@@ -130,28 +139,61 @@ fn run_pipeline(args: &Args) -> Result<String, PipelineError> {
 
     // ── Step 1/3 — extraction ──────────────────────────────────────────────
     logging::info("━━━ Step 1/3 — OCR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    logging::info("  Digital PDF → pdfium  |  Scanned/Handwritten → phase 2");
+    logging::info("  Digital PDF → pdfium  |  Scanned/Handwritten → PP-OCR (Rust)");
     let pdf = EatPdf::bind().map_err(|e| PipelineError(e.to_string()))?;
     let t1 = Instant::now();
     let extracts = pdf
         .extract_pdf(&inp.to_string_lossy())
         .map_err(|e| PipelineError(e.to_string()))?;
     let mut pages: Vec<Vec<Word>> = Vec::new();
+    let mut ocr_engine: Option<RapidOcr> = None;
+    const SCAN_DPI: f32 = 300.0;
+    const CONFIDENCE_THRESHOLD: f32 = 0.4;
     for (i, ex) in extracts.iter().enumerate() {
         if ex.scanned {
-            logging::warn(&format!(
-                "  Page {}: SCAN/HANDWRITTEN — scanned-page OCR is phase 2 of the Rust port; \
-                 this page contributes 0 words",
-                i + 1
+            let t = Instant::now();
+            if ocr_engine.is_none() {
+                ocr_engine = Some(RapidOcr::load().map_err(|e| PipelineError(e.to_string()))?);
+            }
+            let engine = ocr_engine.as_mut().unwrap();
+            let (w, h, rgb) = pdf
+                .render_page_rgb(&inp.to_string_lossy(), i as i32, SCAN_DPI)
+                .map_err(|e| PipelineError(e.to_string()))?;
+            let img = Img::from_rgb(w as usize, h as usize, &rgb);
+            let lines = engine.run(&img).map_err(|e| PipelineError(e.to_string()))?;
+            // px → PDF points (300 dpi render): pt = px * 72 / dpi
+            let scale = 72.0 / SCAN_DPI as f64;
+            let mut words = Vec::new();
+            for l in lines {
+                if l.text.trim().is_empty() || l.score < CONFIDENCE_THRESHOLD {
+                    continue;
+                }
+                words.push(Word {
+                    text: l.text.clone(),
+                    box_: [
+                        [l.box_[0].0 * scale, l.box_[0].1 * scale],
+                        [l.box_[1].0 * scale, l.box_[1].1 * scale],
+                        [l.box_[2].0 * scale, l.box_[2].1 * scale],
+                        [l.box_[3].0 * scale, l.box_[3].1 * scale],
+                    ],
+                });
+            }
+            logging::info(&format!(
+                "  Page {}: SCAN/HANDWRITTEN  ({} words via PP-OCR @ {} DPI, {:.1}s)",
+                i + 1,
+                words.len(),
+                SCAN_DPI,
+                t.elapsed().as_secs_f32()
             ));
+            pages.push(words);
         } else {
             logging::info(&format!(
                 "  Page {}: DIGITAL  ({} words via pdfium)",
                 i + 1,
                 ex.words.len()
             ));
+            pages.push(ex.words.clone());
         }
-        pages.push(ex.words.clone());
     }
     let total_words: usize = pages.iter().map(|p| p.len()).sum();
     logging::info(&format!(

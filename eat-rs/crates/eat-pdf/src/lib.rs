@@ -195,6 +195,25 @@ impl EatPdf {
     pub fn pdfium(&self) -> &Pdfium {
         &self.pdfium
     }
+
+    /// Render a page to RGB bytes at the given DPI (for the scanned-page OCR
+    /// path — the Rust equivalent of ocr_engine's `page.get_pixmap` step).
+    pub fn render_page_rgb(
+        &self,
+        path: &str,
+        page_idx: i32,
+        dpi: f32,
+    ) -> Result<(u32, u32, Vec<u8>), PdfError> {
+        let doc = self
+            .pdfium
+            .load_pdf_from_file(path, None)
+            .map_err(|e| PdfError::Load(format!("{} ({})", e, path)))?;
+        let page = doc.pages().get(page_idx).map_err(internal)?;
+        let config = PdfRenderConfig::new().scale_page_by_factor(dpi / 72.0);
+        let bitmap = page.render_with_config(&config).map_err(internal)?;
+        let img = bitmap.as_image().map_err(internal)?.to_rgb8();
+        Ok((img.width(), img.height(), img.into_raw()))
+    }
 }
 
 // ── annotator (port of annotator.py — sidebar tags) ─────────────────────────

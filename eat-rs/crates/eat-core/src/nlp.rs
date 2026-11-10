@@ -132,6 +132,8 @@ impl NlpEngine {
 
     // ── Ollama call ───────────────────────────────────────────────────────────
 
+    /// POST to Ollama with streaming + loop detection, returning the full
+    /// accumulated response text. Retries once on transient failures.
     fn call_ollama(&self, text: &str, chunk_index: usize, total_chunks: usize) -> Result<String, NlpError> {
         let word_count = text.split_whitespace().count();
         logging::info(&format!(
@@ -142,7 +144,7 @@ impl NlpEngine {
             "model":   self.model,
             "prompt":  text,
             "system":  self.system_prompt,
-            "stream":  false,
+            "stream":  true,
             "options": {
                 "temperature": TEMPERATURE,
                 "num_predict": MAX_TOKENS,
@@ -159,41 +161,21 @@ impl NlpEngine {
             {
                 Ok(resp) => {
                     let status = resp.status();
-                    if status == 404 {
-                        return Err(NlpError::ModelNotFound(format!(
-                            "Ollama model '{}' not found.  Pull it first:  ollama pull {}",
-                            self.model, self.model
-                        )));
-                    }
-                    if status >= 500 && attempt == 1 {
-                        logging::warn(&format!(
-                            "  Ollama server error {} — retrying in 2s …",
-                            status
-                        ));
-                        std::thread::sleep(Duration::from_secs(2));
-                        continue;
-                    }
                     if status >= 400 {
+                        if status == 404 {
+                            return Err(NlpError::ModelNotFound(format!(
+                                "Ollama model '{}' not found.  Pull it first:  ollama pull {}",
+                                self.model, self.model
+                            )));
+                        }
+                        if status >= 500 && attempt == 1 {
+                            logging::warn(&format!("  Ollama server error {} — retrying in 2s …", status));
+                            std::thread::sleep(Duration::from_secs(2));
+                            continue;
+                        }
                         return Err(NlpError::Http(format!("Ollama HTTP {}", status)));
                     }
-                    match resp.into_json::<Value>() {
-                        Ok(data) => {
-                            let raw = data
-                                .get("response")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            logging::info(&format!(
-                                "  Ollama responded ({} chars)",
-                                raw.chars().count()
-                            ));
-                            return Ok(raw);
-                        }
-                        Err(_) => {
-                            logging::error("  Ollama returned non-JSON response — skipping chunk.");
-                            return Ok(String::new());
-                        }
-                    }
+                    return Ok(self.read_stream(resp, word_count));
                 }
                 Err(ureq::Error::Status(code, _)) => {
                     if code == 404 {
@@ -203,10 +185,7 @@ impl NlpEngine {
                         )));
                     }
                     if code >= 500 && attempt == 1 {
-                        logging::warn(&format!(
-                            "  Ollama server error {} — retrying in 2s …",
-                            code
-                        ));
+                        logging::warn(&format!("  Ollama server error {} — retrying in 2s …", code));
                         std::thread::sleep(Duration::from_secs(2));
                         continue;
                     }
@@ -231,6 +210,86 @@ impl NlpEngine {
         Err(NlpError::OllamaUnreachable(
             last_err.unwrap_or_else(|| "Ollama request failed after retry".to_string()),
         ))
+    }
+
+    /// Read a streaming Ollama response, accumulating `response` chunks.
+    /// Small local models occasionally loop on noisy OCR text, repeating the
+    /// same error objects indefinitely (observed: >10 min per chunk). We cut
+    /// the stream as soon as an `original` value appears a 3rd time or the
+    /// object count becomes implausible; the tier-3 line parser then
+    /// recovers every complete object from the accumulated prefix.
+    fn read_stream(&self, resp: ureq::Response, word_count: usize) -> String {
+        use std::collections::HashMap;
+        use std::io::BufRead;
+
+        let max_objects = (word_count / 2).max(40) as u32;
+        let mut reader = std::io::BufReader::new(resp.into_reader());
+        let mut raw = String::new();
+        let mut seen: HashMap<String, u32> = HashMap::new();
+        let mut line = String::new();
+        let mut lines_since_check = 0u32;
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // EOF — model finished
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let chunk: Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(t) = chunk.get("response").and_then(|v| v.as_str()) {
+                raw.push_str(t);
+            }
+            if chunk.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                break;
+            }
+
+            // loop detection over complete "original":"…" spans. Counts are
+            // rebuilt from scratch each check so every occurrence is counted
+            // exactly once (an incremental map double-counts as raw grows).
+            lines_since_check += 1;
+            if lines_since_check >= 8 {
+                lines_since_check = 0;
+                seen.clear();
+                let mut count = 0u32;
+                let mut looping = false;
+                let mut rest = raw.as_str();
+                while let Some(pos) = rest.find("\"original\"") {
+                    let after = &rest[pos + 10..];
+                    let val_start = after.find('"').map(|i| i + 1);
+                    if let Some(vs) = val_start {
+                        if let Some(vend) = after[vs..].find('"') {
+                            count += 1;
+                            let val = &after[vs..vs + vend];
+                            let e = seen.entry(val.to_string()).or_insert(0);
+                            *e += 1;
+                            if *e >= 3 {
+                                looping = true;
+                            }
+                            rest = &after[vs + vend + 1..];
+                            continue;
+                        }
+                    }
+                    break; // incomplete trailing span — wait for more tokens
+                }
+                if looping || count > max_objects {
+                    logging::warn(&format!(
+                        "  Model response is looping — cutting stream, parsing prefix (count={} max={})",
+                        count, max_objects
+                    ));
+                    break;
+                }
+            }
+        }
+        logging::info(&format!("  Ollama responded ({} chars)", raw.chars().count()));
+        raw
     }
 
     // ── fault-tolerant JSON parser (4 tiers) ─────────────────────────────────

@@ -11,5 +11,6 @@ path = "src/main.rs"
 [dependencies]
 eat-core = { path = "../eat-core" }
 eat-pdf = { path = "../eat-pdf" }
+eat-ocr = { path = "../eat-ocr" }
 serde_json = { workspace = true }
 clap = { workspace = true }
