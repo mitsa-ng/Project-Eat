@@ -1,0 +1,15 @@
+[package]
+name = "eat-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "eat-gui"
+path = "src/main.rs"
+
+[dependencies]
+eat-app = { path = "../eat-app" }
+eat-core = { path = "../eat-core" }
+eframe = "0.33"
+rfd = "0.15"

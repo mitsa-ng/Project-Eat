@@ -171,7 +171,7 @@ impl RapidOcr {
         });
 
         // perspective crops
-        let mut crops: Vec<Img> = sorted
+        let crops: Vec<Img> = sorted
             .iter()
             .map(|b| {
                 img.perspective_crop([
@@ -191,7 +191,7 @@ impl RapidOcr {
         let (mut txts, mut scores) = self.recognize(&crops)?;
         for i in 0..crops.len() {
             if scores[i] < REC_FLIP_RETRY_THRESHOLD {
-                let mut flipped = vec![crops[i].rotate180()];
+                let flipped = vec![crops[i].rotate180()];
                 let (t2, s2) = self.recognize(&flipped)?;
                 if s2[0] > scores[i] {
                     txts[i] = t2[0].clone();

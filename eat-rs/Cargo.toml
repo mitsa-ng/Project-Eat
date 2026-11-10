@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/eat-core", "crates/eat-pdf", "crates/eat-ocr", "crates/eat-cli"]
+members = ["crates/eat-core", "crates/eat-pdf", "crates/eat-ocr", "crates/eat-app", "crates/eat-cli", "crates/eat-gui"]
 
 [workspace.package]
 version = "0.1.0"

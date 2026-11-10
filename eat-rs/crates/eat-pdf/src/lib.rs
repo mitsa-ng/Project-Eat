@@ -337,19 +337,67 @@ pub struct Annotator {
     cjk: bool,
 }
 
+/// Locate the bundled CJK font (Noto Sans CJK TC, covers zh-Hant/zh-Hans/ja/ko
+/// glyph ranges). Resolution: `$EAT_CJK_FONT` → `fonts/` beside the executable
+/// → workspace `vendor/fonts/` (dev layout).
+fn cjk_font_path() -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("EAT_CJK_FONT") {
+        candidates.push(p.into());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("fonts").join(CJK_FONT_FILE));
+            candidates.push(dir.join(CJK_FONT_FILE));
+        }
+    }
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(
+            std::path::Path::new(&manifest)
+                .join("../../vendor/fonts")
+                .join(CJK_FONT_FILE),
+        );
+    }
+    candidates.into_iter().find(|p| p.exists())
+}
+
+const CJK_FONT_FILE: &str = "NotoSansCJKtc-Regular.otf";
+
 impl Annotator {
     pub fn new(language: &str) -> Self {
-        let language = normalize(language).to_string();
-        let cjk = is_cjk(&language);
-        if cjk {
-            // Helvetica (WinAnsi) cannot render CJK tag text; CJK-capable font
-            // embedding is phase 2 of the Rust port. Tags still get correct
-            // geometry and colour; suggestion glyphs may not render.
-            eat_core::logging::warn(
-                "  CJK tag font not yet bundled; sidebar suggestions may not render glyphs",
-            );
+        Annotator { language: normalize(language).to_string(), cjk: is_cjk(language) }
+    }
+
+    /// Pick the sidebar-tag font for this document: bundled Noto CJK for
+    /// zh/ja/ko essays (CID-keyed), built-in Helvetica otherwise. Falls back
+    /// to Helvetica with a warning when the CJK font is not installed.
+    fn tag_font(&self, doc: &mut PdfDocument) -> PdfFontToken {
+        if !self.cjk {
+            return doc.fonts_mut().helvetica();
         }
-        Annotator { language, cjk }
+        match cjk_font_path() {
+            Some(path) => match doc
+                .fonts_mut()
+                .load_true_type_from_file(&path, true)
+            {
+                Ok(token) => token,
+                Err(e) => {
+                    eat_core::logging::warn(&format!(
+                        "  CJK font load failed ({}) — falling back to Helvetica; \
+                         CJK suggestion glyphs will not render",
+                        e
+                    ));
+                    doc.fonts_mut().helvetica()
+                }
+            },
+            None => {
+                eat_core::logging::warn(
+                    "  CJK font not bundled — falling back to Helvetica; \
+                     CJK suggestion glyphs will not render",
+                );
+                doc.fonts_mut().helvetica()
+            }
+        }
     }
 
     fn alpha(c: (u8, u8, u8), opacity: f32) -> PdfColor {
@@ -369,7 +417,7 @@ impl Annotator {
         let mut doc = pdfium
             .load_pdf_from_file(input_pdf, None)
             .map_err(|e| PdfError::Load(format!("{} ({})", e, input_pdf)))?;
-        let font = doc.fonts_mut().helvetica();
+        let font = self.tag_font(&mut doc);
         let mut total = 0usize;
         let count = doc.pages().len();
 
@@ -573,4 +621,52 @@ fn pdfium_platform_dylib_name() -> &'static str {
     {
         "pdfium.dll"
     }
+}
+
+/// Split OCR line-level word entries into per-token word entries, allocating
+/// the line box horizontally by character share. Digital-PDF words are
+/// already token-level and pass through unchanged (single-token text).
+///
+/// Rationale: RapidOCR (and its Python integration in ocr_engine.py) returns
+/// one entry per text LINE, so the annotator's token-sequence matcher can
+/// never place error tags on scanned essays. Splitting proportionally by
+/// characters gives approximate per-word boxes that are accurate enough for
+/// underline + sidebar tags on horizontal text.
+pub fn split_line_words(pages: &Pages) -> Pages {
+    pages
+        .iter()
+        .map(|words| {
+            let mut out: Vec<Word> = Vec::new();
+            for w in words {
+                let tokens: Vec<&str> = w.text.split_whitespace().collect();
+                if tokens.len() <= 1 {
+                    out.push(w.clone());
+                    continue;
+                }
+                let (x0, y0, x1, y1) = w.rect();
+                let width = (x1 - x0).max(0.0);
+                let total_chars: usize = tokens.iter().map(|t| t.chars().count()).sum();
+                if total_chars == 0 || width <= 0.0 {
+                    out.push(w.clone());
+                    continue;
+                }
+                let mut cx = x0;
+                for t in tokens {
+                    let share = width * (t.chars().count() as f64 / total_chars as f64);
+                    let nx = (cx + share).min(x1);
+                    out.push(Word {
+                        text: t.to_string(),
+                        box_: [
+                            [cx, y0],
+                            [nx, y0],
+                            [nx, y1],
+                            [cx, y1],
+                        ],
+                    });
+                    cx = nx;
+                }
+            }
+            out
+        })
+        .collect()
 }

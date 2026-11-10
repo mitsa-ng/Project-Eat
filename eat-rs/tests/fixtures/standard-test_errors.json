@@ -1,0 +1,38 @@
+[
+  {
+    "original": "doing part-time job",
+    "type": "grammar",
+    "suggestion": "doing part-time jobs",
+    "page": 0
+  },
+  {
+    "original": "their parents burden",
+    "type": "grammar",
+    "suggestion": "their parents' burden",
+    "page": 0
+  },
+  {
+    "original": "their tuition or something else",
+    "type": "grammar",
+    "suggestion": "their tuition or other expenses",
+    "page": 0
+  },
+  {
+    "original": "part-time hob",
+    "type": "spelling",
+    "suggestion": "part-time job",
+    "page": 0
+  },
+  {
+    "original": "in sake of",
+    "type": "spelling",
+    "suggestion": "for the sake of",
+    "page": 0
+  },
+  {
+    "original": "costumers",
+    "type": "spelling",
+    "suggestion": "customers",
+    "page": 0
+  }
+]
