@@ -33,6 +33,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>       <string>APPL</string>
   <key>LSMinimumSystemVersion</key>    <string>13.0</string>
   <key>NSHighResolutionCapable</key>   <true/>
+  <key>NSCameraUsageDescription</key>  <string>即時批改模式需要使用攝影機拍攝學生作文</string>
 </dict>
 </plist>
 PLIST
