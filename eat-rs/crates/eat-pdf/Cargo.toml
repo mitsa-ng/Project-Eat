@@ -1,0 +1,12 @@
+[package]
+name = "eat-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eat-core = { path = "../eat-core" }
+pdfium-render = "0.9"
+
+[dev-dependencies]
+serde_json = { workspace = true }
