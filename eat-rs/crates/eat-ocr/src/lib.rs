@@ -80,6 +80,62 @@ fn py_round(x: f64) -> f64 {
     }
 }
 
+/// VLM 行讀取器：det 找到的每一行裁切圖 → Ollama 視覺模型轉錄。
+/// 手寫辨識品質遠優於 CRNN（實測 fob→job、situatlon→situation、
+/// "m order"→"in order"），且復用既有 Ollama 基礎設施（零新依賴）。
+pub struct VlmReader {
+    agent: ureq::Agent,
+    url: String,
+    model: String,
+}
+
+impl VlmReader {
+    pub fn new(model: &str, ollama_url: &str) -> Self {
+        VlmReader {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(30))
+                .timeout_read(std::time::Duration::from_secs(300))
+                .build(),
+            url: ollama_url.to_string(),
+            model: model.to_string(),
+        }
+    }
+
+    /// 讀取單行裁切圖（PNG bytes）→ 轉錄文字。回 None 表示該行丟棄：
+    /// 空 回應、「NO TEXT」（圖中無文字）、或聊天模板幻覺詞（model 對
+    /// 空白裁切常吐 "system"/"user"/"assistant"——不能讓它進入管線，
+    /// 因為 VLM 模式沒有信心分數可過濾）。
+    pub fn read_line(&self, png: &[u8]) -> Option<String> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+        let payload = serde_json::json!({
+            "model": self.model,
+            "prompt": "Transcribe exactly the text in this image, keeping the original spelling including any mistakes. If the image contains no readable text, output exactly: NO TEXT",
+            "images": [b64],
+            "stream": false,
+            "options": {"temperature": 0, "num_predict": 200, "num_ctx": 2048}
+        });
+        let resp = self
+            .agent
+            .post(&self.url)
+            .timeout(std::time::Duration::from_secs(300))
+            .send_json(payload)
+            .ok()?;
+        let v: serde_json::Value = resp.into_json().ok()?;
+        let text = v.get("response")?.as_str()?.trim().to_string();
+        let lower = text.to_lowercase();
+        if text.is_empty()
+            || text == "NO TEXT"
+            || lower.starts_with("no text")
+            || (matches!(lower.as_str(), "system" | "user" | "assistant")
+                && !png.is_empty())
+        {
+            return None;
+        }
+        Some(text)
+    }
+}
+
 pub struct RapidOcr {
     det: Session,
     rec: Session,
@@ -92,6 +148,16 @@ impl RapidOcr {
     /// directory: `$EAT_PPROCR_DIR` → `models/` beside the executable →
     /// workspace `vendor/ppocr/` (dev layout).
     pub fn load() -> Result<Self, OcrError> {
+        let profile = std::env::var("EAT_PPOCR_PROFILE").unwrap_or_default();
+        let profile = if profile.is_empty() { "small".to_string() } else { profile };
+        Self::load_profile(&profile)
+    }
+
+    /// Load a specific model profile: "small" (default, fast) or "medium"
+    /// (higher accuracy, ~7× model size). Same dictionary and I/O signature.
+    pub fn load_profile(profile: &str) -> Result<Self, OcrError> {
+        let det_name = format!("PP-OCRv6_det_{}.onnx", profile);
+        let rec_name = format!("PP-OCRv6_rec_{}.onnx", profile);
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
         if let Ok(p) = std::env::var("EAT_PPROCR_DIR") {
             candidates.push(p.into());
@@ -107,31 +173,38 @@ impl RapidOcr {
         }
         let mut last = "no candidate dirs".to_string();
         for dir in &candidates {
-            if dir.join("PP-OCRv6_det_small.onnx").exists() {
-                return Self::load_from(dir);
+            if dir.join(&det_name).exists() {
+                return Self::load_from_named(dir, &det_name, &rec_name);
             }
-            last = format!("missing models in {}", dir.display());
+            last = format!("missing {} in {}", det_name, dir.display());
         }
         Err(OcrError::ModelsNotFound(last))
     }
 
     pub fn load_from(dir: &std::path::Path) -> Result<Self, OcrError> {
+        Self::load_from_named(dir, "PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_small.onnx")
+    }
+
+    fn load_from_named(dir: &std::path::Path, det_name: &str, rec_name: &str) -> Result<Self, OcrError> {
         let env = ort::init().build().map_err(ort_err)?;
         let det = Session::builder(&env)
-            .and_then(|mut b| b.commit_from_file(dir.join("PP-OCRv6_det_small.onnx")))
+            .and_then(|mut b| b.commit_from_file(dir.join(det_name)))
             .map_err(ort_err)?;
         let rec = Session::builder(&env)
-            .and_then(|mut b| b.commit_from_file(dir.join("PP-OCRv6_rec_small.onnx")))
+            .and_then(|mut b| b.commit_from_file(dir.join(rec_name)))
             .map_err(ort_err)?;
-
-        let dict_raw = std::fs::read_to_string(dir.join("rec_keys.txt"))
-            .map_err(|e| OcrError::Dict(format!("rec_keys.txt: {} ({})", e, dir.display())))?;
+        let dict_path = if dir.join("rec_keys_medium.txt").exists() && rec_name.contains("medium") {
+            dir.join("rec_keys_medium.txt")
+        } else {
+            dir.join("rec_keys.txt")
+        };
+        let dict_raw = std::fs::read_to_string(&dict_path)
+            .map_err(|e| OcrError::Dict(format!("{}: {} ({})", dict_path.display(), e, dir.display())))?;
         let mut character: Vec<String> = dict_raw.split('\n').map(|s| s.to_string()).collect();
-        // rapidocr CTCLabelDecode: append space, prepend blank
         character.push(" ".to_string());
         character.insert(0, "blank".to_string());
+        return Ok(RapidOcr { det, rec, character });
 
-        Ok(RapidOcr { det, rec, character })
     }
 
     /// Run the full det→cls→rec pipeline on a BGR image. Returns lines in
@@ -298,6 +371,93 @@ impl RapidOcr {
         debug_assert_eq!(pred.len(), ph * pw);
 
         Ok(db_postprocess(&pred, pw, ph, img.w, img.h))
+    }
+
+    /// 混合模式：PP-OCR det（行框）+ VLM 逐行轉錄。
+    /// 回傳行（score=1.0；VLM 不提供信心值）。flip-retry 不需要——VLM
+    /// 天生處理顛倒文字。
+    pub fn run_with_reader(&mut self, img_bgr: &Img, vlm: &VlmReader) -> Result<Vec<OcrLine>, OcrError> {
+        if img_bgr.w < 2 || img_bgr.h < 2 {
+            return Ok(Vec::new());
+        }
+        let scale = if img_bgr.w.max(img_bgr.h) > MAX_SIDE_LEN {
+            MAX_SIDE_LEN as f64 / img_bgr.w.max(img_bgr.h) as f64
+        } else {
+            1.0
+        };
+        let img = if scale < 1.0 {
+            img_bgr.resize(
+                ((img_bgr.w as f64 * scale) as usize).max(1),
+                ((img_bgr.h as f64 * scale) as usize).max(1),
+            )
+        } else {
+            img_bgr.clone()
+        };
+        let boxes = self.detect(&img)?;
+        if boxes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sorted = boxes;
+        sorted.sort_by(|a, b| {
+            let (ya, yb) = (a[0].1, b[0].1);
+            (ya / BOX_SORT_Y_THRESHOLD)
+                .partial_cmp(&(yb / BOX_SORT_Y_THRESHOLD))
+                .unwrap()
+                .then(a[0].0.partial_cmp(&b[0].0).unwrap())
+        });
+
+        let inv = 1.0 / scale;
+        let mut out = Vec::new();
+        for b in &sorted {
+            let crop = img_bgr.perspective_crop([
+                Pt::new(b[0].0, b[0].1),
+                Pt::new(b[1].0, b[1].1),
+                Pt::new(b[2].0, b[2].1),
+                Pt::new(b[3].0, b[3].1),
+            ]);
+            // Img 是 BGR；VLM 要 RGB PNG。控制 image tokens：行高縮放到
+            // ≤64px（保持可讀）、寬度上限 2000px（超長行等比縮）。
+            // 注意行條的寬高比極大（~50:1），用「先高後寬」順序才不會
+            // 把字壓扁（先前只限寬 640 → 行高剩 13px → 不可讀）。
+            let crop = if crop.h > 64 {
+                let nw = ((crop.w as f64 * 64.0 / crop.h as f64) as usize).max(16);
+                crop.resize(nw.min(2000), 64)
+            } else if crop.w > 2000 {
+                crop.resize(2000, ((crop.h as f64 * 2000.0 / crop.w as f64) as usize).max(16))
+            } else {
+                crop
+            };
+            let rgb = bgr_to_rgb(&crop);
+            let png: Vec<u8> = {
+                let buf = image::RgbImage::from_raw(rgb.w as u32, rgb.h as u32, rgb.data.clone())
+                    .unwrap_or_default();
+                let mut out = Vec::new();
+                let dynimg = image::DynamicImage::ImageRgb8(buf);
+                if dynimg.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).is_err() {
+                    continue;
+                }
+                out
+            };
+            match vlm.read_line(&png) {
+                Some(text) => {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    out.push(OcrLine {
+                        box_: [
+                            (b[0].0 * inv, b[0].1 * inv),
+                            (b[1].0 * inv, b[1].1 * inv),
+                            (b[2].0 * inv, b[2].1 * inv),
+                            (b[3].0 * inv, b[3].1 * inv),
+                        ],
+                        text,
+                        score: 1.0,
+                    });
+                }
+                None => continue,
+            }
+        }
+        Ok(out)
     }
 
     // ── recognition ───────────────────────────────────────────────────────────
@@ -534,6 +694,14 @@ pub fn db_postprocess(
 }
 
 impl RapidOcr {
+}
+
+fn bgr_to_rgb(img: &Img) -> Img {
+    let mut data = img.data.clone();
+    for px in data.chunks_exact_mut(3) {
+        px.swap(0, 2);
+    }
+    Img { w: img.w, h: img.h, data }
 }
 
 #[cfg(test)]

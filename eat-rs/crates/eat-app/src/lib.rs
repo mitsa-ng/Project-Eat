@@ -45,6 +45,14 @@ pub struct PipelineOpts {
     pub save_intermediate: bool,
     pub no_spell_correct: bool,
     pub no_gpu: bool,
+    /// 掃描頁讀取引擎："ppocr"（本機 CRNN，快）或 "vlm"（Ollama 視覺模型
+    /// 逐行精讀，手寫準確度大幅提升）。det（行框）一律用本機 PP-OCR。
+    pub reader: String,
+    pub vlm_model: String,
+}
+
+fn vlm_model_name(opts: &PipelineOpts) -> String {
+    if opts.vlm_model.is_empty() { "qwen2.5vl:7b".into() } else { opts.vlm_model.clone() }
 }
 
 #[derive(Debug)]
@@ -145,7 +153,14 @@ pub fn run_pipeline(args: &PipelineOpts) -> Result<String, PipelineError> {
                 .render_page_rgb(&inp.to_string_lossy(), i as i32, SCAN_DPI)
                 .map_err(|e| PipelineError(e.to_string()))?;
             let img = Img::from_rgb(w as usize, h as usize, &rgb);
-            let lines = engine.run(&img).map_err(|e| PipelineError(e.to_string()))?;
+            let lines = if args.reader == "vlm" {
+                let url = args.ollama_url.clone().unwrap_or_else(default_ollama_url);
+                let vlm = eat_ocr::VlmReader::new(&vlm_model_name(args), &url);
+                logging::info(&format!("  Page {}: VLM 行讀取（{}）…", i + 1, vlm_model_name(args)));
+                engine.run_with_reader(&img, &vlm).map_err(|e| PipelineError(e.to_string()))?
+            } else {
+                engine.run(&img).map_err(|e| PipelineError(e.to_string()))?
+            };
             // px → PDF points (300 dpi render): pt = px * 72 / dpi
             let scale = 72.0 / SCAN_DPI as f64;
             let mut words = Vec::new();

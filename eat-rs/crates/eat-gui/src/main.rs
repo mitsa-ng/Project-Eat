@@ -61,6 +61,8 @@ struct EatGui {
     ollama_url: String,
     language: String,
     save_intermediate: bool,
+    reader: String, // "ppocr" | "vlm"
+    vlm_model: String,
     state: Arc<Mutex<BatchState>>,
     ollama: Arc<Mutex<Option<OllamaStatus>>>,
     pull_running: Arc<AtomicBool>,
@@ -91,8 +93,9 @@ impl LiveState {
     }
 }
 
-impl Default for EatGui {
-    fn default() -> Self {
+impl EatGui {
+    fn new(cc: &eframe::CreationContext) -> Self {
+        install_cjk_font(&cc.egui_ctx);
         let state = Arc::new(Mutex::new(BatchState::default()));
         install_log_sink(state.clone());
         let gui = EatGui {
@@ -102,6 +105,8 @@ impl Default for EatGui {
             ollama_url: default_ollama_url(),
             language: default_language(),
             save_intermediate: false,
+            reader: "vlm".into(),
+            vlm_model: "qwen2.5vl:7b".into(),
             state,
             ollama: Arc::new(Mutex::new(Some(OllamaStatus::Checking))),
             pull_running: Arc::new(AtomicBool::new(false)),
@@ -112,6 +117,57 @@ impl Default for EatGui {
         gui
     }
 }
+
+/// egui 預設只附 Ubuntu-Light（無 CJK 字形），介面中文會變成方框。
+/// 這裡把隨附的 Noto Sans CJK 註冊進 egui 字型表（常規＋等寬家族）。
+fn install_cjk_font(ctx: &egui::Context) {
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if let Ok(p) = std::env::var("EAT_CJK_FONT") {
+            v.push(p.into());
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                v.push(dir.join("fonts").join(CJK_FONT_FILE));
+                v.push(dir.join(CJK_FONT_FILE));
+            }
+        }
+        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+            v.push(std::path::Path::new(&manifest)
+                .join("../../vendor/fonts")
+                .join(CJK_FONT_FILE));
+        }
+        v
+    };
+    let path = match candidates.iter().find(|p| p.exists()) {
+        Some(p) => p.clone(),
+        None => {
+            eprintln!("eat-gui: CJK font not found — UI Chinese text will render as boxes");
+            return;
+        }
+    };
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("eat-gui: cannot read {}: {}", path.display(), e);
+            return;
+        }
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "noto_cjk".into(),
+        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+    );
+    // prepend so CJK takes priority over the default Latin face for matching glyphs
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        if let Some(list) = fonts.families.get_mut(&family) {
+            list.insert(0, "noto_cjk".into());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
+const CJK_FONT_FILE: &str = "NotoSansCJKtc-Regular.otf";
 
 impl EatGui {
     fn spawn_ollama_check(&self) {
@@ -427,6 +483,8 @@ impl EatGui {
         let opts = PipelineOpts {
             input_pdf: None,
             output: None,
+            reader: self.reader.clone(),
+            vlm_model: self.vlm_model.clone(),
             model: Some(self.model.clone()),
             ollama_url: Some(self.ollama_url.clone()),
             language: Some(self.language.clone()),
@@ -602,6 +660,22 @@ impl eframe::App for EatGui {
                     ui.label("Ollama URL");
                     ui.text_edit_singleline(&mut self.ollama_url);
                 });
+                ui.horizontal(|ui| {
+                    ui.label("掃描讀取引擎");
+                    egui::ComboBox::from_id_salt("reader")
+                        .selected_text(if self.reader == "vlm" { "VLM 手寫精讀（準，每頁約 30 分鐘）".to_string() } else { "PP-OCR 本機（快）".to_string() })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.reader, "vlm".into(), "VLM 手寫精讀（準，每頁約 30 分鐘）");
+                            ui.selectable_value(&mut self.reader, "ppocr".into(), "PP-OCR 本機（快）");
+                        });
+                    if self.reader == "vlm" {
+                        ui.label("視覺模型");
+                        ui.text_edit_singleline(&mut self.vlm_model);
+                        if !models_available(&self.ollama).contains(&self.vlm_model) {
+                            ui.colored_label(egui::Color32::from_rgb(0xb2, 0x6a, 0x00), format!("需先 ollama pull {}", self.vlm_model));
+                        }
+                    }
+                });
             });
 
             ui.add_space(8.0);
@@ -722,6 +796,13 @@ impl eframe::App for EatGui {
     }
 }
 
+fn models_available(ollama: &Arc<Mutex<Option<OllamaStatus>>>) -> Vec<String> {
+    match &*ollama.lock().unwrap() {
+        Some(OllamaStatus::Reachable(m)) => m.clone(),
+        _ => Vec::new(),
+    }
+}
+
 fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
     for px in rgb.chunks_exact(3) {
@@ -737,5 +818,5 @@ fn main() -> eframe::Result {
             .with_title("AI 作文批改 Project-EAT"),
         ..Default::default()
     };
-    eframe::run_native("eat-gui", native, Box::new(|_cc| Ok(Box::new(EatGui::default()))))
+    eframe::run_native("eat-gui", native, Box::new(|cc| Ok(Box::new(EatGui::new(cc)))))
 }

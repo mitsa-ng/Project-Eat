@@ -46,6 +46,17 @@ struct Args {
     /// Accepted for Python-CLI compatibility; pdfium needs no GPU flag.
     #[arg(long)]
     no_gpu: bool,
+
+    /// Scanned-page reading engine: "ppocr" (local CRNN, fast, default) or
+    /// "vlm" (Ollama vision model reads each detected line — far better on
+    /// handwriting).
+    #[arg(long, default_value = "ppocr")]
+    reader: String,
+
+    /// Vision model for --reader vlm (default: qwen2.5vl:7b, needs
+    /// `ollama pull qwen2.5vl:7b`).
+    #[arg(long, default_value = "qwen2.5vl:7b")]
+    vlm_model: String,
 }
 
 fn main() {
@@ -59,6 +70,8 @@ fn main() {
         save_intermediate: args.save_intermediate,
         no_spell_correct: args.no_spell_correct,
         no_gpu: args.no_gpu,
+        reader: args.reader,
+        vlm_model: args.vlm_model,
     };
     if let Err(e) = eat_app::run_pipeline(&opts) {
         eat_core::logging::error(&e.0);

@@ -1193,11 +1193,13 @@ dependencies = [
 name = "eat-ocr"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "eat-core",
  "image",
  "ort",
  "serde",
  "serde_json",
+ "ureq 2.12.1",
 ]
 
 [[package]]

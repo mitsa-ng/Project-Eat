@@ -18,7 +18,7 @@ cp target/x86_64-pc-windows-gnu/release/eat.exe     "$APP/"
 cp target/x86_64-pc-windows-gnu/release/eat-gui.exe "$APP/Project-EAT.exe"
 cp /tmp/pdfium.dll                                  "$APP/"
 find /tmp/ort-win -name onnxruntime.dll -exec cp {} "$APP/" \;
-cp vendor/ppocr/*.onnx vendor/ppocr/rec_keys.txt    "$APP/models/"
+cp vendor/ppocr/PP-OCRv6_det_small.onnx vendor/ppocr/PP-OCRv6_rec_small.onnx vendor/ppocr/rec_keys.txt "$APP/models/"
 cp vendor/fonts/NotoSansCJKtc-Regular.otf           "$APP/fonts/"
 
 ( cd "$(dirname "$APP")" && zip -qr Project-EAT-win.zip "$(basename "$APP")" )
