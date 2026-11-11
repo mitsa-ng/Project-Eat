@@ -427,28 +427,35 @@ pub fn run_batch(
         }
         std::fs::write(std::path::Path::new(input_dir).join(REPORT_SUMMARY), &csv).ok();
 
-        let mut dcsv = String::from("essay,總分,問題句子,類型,錯字或錯處,建議\n");
-        for d in &detail_rows {
-            let kind = match d.kind.as_str() {
-                "spelling" => "拼字",
-                "grammar" => "文法",
-                _ => "語意",
-            };
-            dcsv.push_str(&format!(
-                "{},{},\"{}\",{},\"{}\",\"{}\"\n",
-                d.essay,
-                d.total,
-                esc(&d.sentence),
-                kind,
-                esc(&d.original),
-                esc(&d.suggestion)
-            ));
+        // 每份作文一個明細檔（使用者要求：一個文檔一個錯誤明細）
+        for (name, g) in &score_rows {
+            let stem = name.trim_end_matches(".pdf");
+            let mut dcsv = String::from("總分,問題句子,類型,錯字或錯處,建議\n");
+            for d in detail_rows.iter().filter(|d| d.essay == *name) {
+                let kind = match d.kind.as_str() {
+                    "spelling" => "拼字",
+                    "grammar" => "文法",
+                    _ => "語意",
+                };
+                dcsv.push_str(&format!(
+                    "{},\"{}\",{},\"{}\",\"{}\"\n",
+                    d.total,
+                    esc(&d.sentence),
+                    kind,
+                    esc(&d.original),
+                    esc(&d.suggestion)
+                ));
+            }
+            let _ = g; // 分數已顯示於總表；明細行內含總分欄
+            std::fs::write(
+                std::path::Path::new(input_dir).join(format!("{}_錯誤明細.csv", stem)),
+                &dcsv,
+            )
+            .ok();
         }
-        std::fs::write(std::path::Path::new(input_dir).join(REPORT_DETAIL), &dcsv).ok();
         logging::info(&format!(
-            "批改報表 → {} / {}",
-            std::path::Path::new(input_dir).join(REPORT_SUMMARY).display(),
-            std::path::Path::new(input_dir).join(REPORT_DETAIL).display()
+            "批改報表 → {}（總表＋每份作文一個明細 CSV）",
+            std::path::Path::new(input_dir).join(REPORT_SUMMARY).display()
         ));
     }
 
@@ -471,12 +478,19 @@ pub fn run_batch(
                     Err(_) => ok = false,
                 }
             }
-            // 批改報表 CSV 一併打包
-            for report_name in [REPORT_SUMMARY, REPORT_DETAIL] {
-                let path = std::path::Path::new(input_dir).join(report_name);
-                if let Ok(bytes) = std::fs::read(&path) {
-                    if zip.start_file(report_name, zip::write::SimpleFileOptions::default()).is_ok() {
-                        let _ = std::io::Write::write_all(&mut zip, &bytes);
+            // 批改報表 CSV 一併打包（總表＋每份作文的明細檔）
+            if let Ok(rd) = std::fs::read_dir(input_dir) {
+                let mut names: Vec<String> = rd
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n == REPORT_SUMMARY || n.ends_with("_錯誤明細.csv"))
+                    .collect();
+                names.sort();
+                for report_name in names {
+                    if let Ok(bytes) = std::fs::read(std::path::Path::new(input_dir).join(&report_name)) {
+                        if zip.start_file(report_name.as_str(), zip::write::SimpleFileOptions::default()).is_ok() {
+                            let _ = std::io::Write::write_all(&mut zip, &bytes);
+                        }
                     }
                 }
             }
@@ -495,7 +509,6 @@ pub fn run_batch(
 }
 
 const REPORT_SUMMARY: &str = "批改總表.csv";
-const REPORT_DETAIL: &str = "錯誤明細.csv";
 
 
 /// 試卷表單雜訊判定：頁碼（Page 5 of 7、第3頁、純數字）、點數標示
