@@ -1,0 +1,146 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, rust-rewrite]
+  pull_request:
+    branches: [main, rust-rewrite]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            name: macOS-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: Windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: eat-rs
+          key: ${{ matrix.target }}
+
+      - name: Run tests
+        working-directory: eat-rs
+        run: cargo test --release
+
+  package-macos:
+    needs: test
+    if: github.ref == 'refs/heads/rust-rewrite' || startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: eat-rs
+          key: aarch64-apple-darwin
+
+      - name: Build release
+        working-directory: eat-rs
+        run: cargo build --release -p eat-cli -p eat-gui
+
+      - name: Assemble .app
+        working-directory: eat-rs
+        run: ./scripts/make-app.sh dist
+
+      - name: Codesign (ad-hoc)
+        run: |
+          codesign --force --deep --sign - "eat-rs/dist/Project-EAT.app"
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Project-EAT-macos-arm64
+          path: eat-rs/dist/Project-EAT.app
+          retention-days: 30
+
+  package-windows:
+    needs: test
+    if: github.ref == 'refs/heads/rust-rewrite' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: eat-rs
+          key: x86_64-pc-windows-msvc
+
+      - name: Build release (MSVC)
+        working-directory: eat-rs
+        shell: pwsh
+        run: cargo build --release -p eat-cli -p eat-gui
+
+      - name: Assemble Windows dist
+        working-directory: eat-rs
+        shell: pwsh
+        run: |
+          $app = "dist/win/Project-EAT-win"
+          New-Item -ItemType Directory -Force -Path "$app/models", "$app/fonts"
+
+          Copy-Item target/release/eat.exe "$app/"
+          Copy-Item target/release/eat-gui.exe "$app/Project-EAT.exe"
+
+          # pdfium.dll (vendored)
+          Copy-Item vendor/pdfium-win-x64/pdfium.dll "$app/"
+
+          # onnxruntime.dll: download from Microsoft release (ort load-dynamic)
+          $ortVer = "1.31.0"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVer/onnxruntime-win-x64-$ortVer.zip"
+          Invoke-WebRequest -Uri $url -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort -Force
+          Copy-Item "ort/onnxruntime-win-x64-$ortVer/lib/onnxruntime.dll" "$app/"
+
+          # PP-OCR models + font
+          Copy-Item vendor/ppocr/PP-OCRv6_det_small.onnx "$app/models/"
+          Copy-Item vendor/ppocr/PP-OCRv6_rec_small.onnx "$app/models/"
+          Copy-Item vendor/ppocr/rec_keys.txt "$app/models/"
+          Copy-Item vendor/fonts/NotoSansCJKtc-Regular.otf "$app/fonts/"
+
+          # zip
+          Compress-Archive -Path $app -DestinationPath dist/win/Project-EAT-win-x64.zip
+
+      - name: Upload Windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Project-EAT-windows-x64
+          path: eat-rs/dist/win/Project-EAT-win-x64.zip
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package-macos, package-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Project-EAT-*
+          merge-multiple: false
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Project-EAT-macos-arm64/**
+            Project-EAT-windows-x64/*
+          generate_release_notes: true

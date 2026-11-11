@@ -1,0 +1,18 @@
+[package]
+name = "eat-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eat-core = { path = "../eat-core" }
+eat-pdf = { path = "../eat-pdf" }
+eat-ocr = { path = "../eat-ocr" }
+serde_json = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+ureq = { workspace = true }

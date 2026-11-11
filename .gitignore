@@ -1,27 +1,2 @@
-# Python
-__pycache__/
-*.pyc
-
-# macOS
-.DS_Store
-
-# Tooling
-.spectra/
-.opencode/
-.agent/
-openspec/
-docs/
-
-# Large media (demo recordings)
-*.mov
-
-# Generated outputs
-pdfs_annotated*/
-pdfs_annotated.zip
-pretest_posttest_output/
-*_annotated.pdf
-*_ocr.json
-*_errors.json
-
-# Misc
-sampleREADME.md
+eat-rs/dist/
+dist/

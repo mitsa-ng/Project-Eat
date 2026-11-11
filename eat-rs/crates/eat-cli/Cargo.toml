@@ -1,0 +1,17 @@
+[package]
+name = "eat-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "eat"
+path = "src/main.rs"
+
+[dependencies]
+eat-core = { path = "../eat-core" }
+eat-pdf = { path = "../eat-pdf" }
+eat-ocr = { path = "../eat-ocr" }
+eat-app = { path = "../eat-app" }
+serde_json = { workspace = true }
+clap = { workspace = true }

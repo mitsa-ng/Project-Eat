@@ -1,0 +1,21 @@
+[package]
+name = "eat-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eat-core = { path = "../eat-core" }
+ort = { workspace = true }
+image = { workspace = true }
+base64 = "0.22"
+ureq = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+
+# Windows (mingw cross-build): ort-sys has no windows-gnu prebuilts; load the
+# bundled onnxruntime.dll at runtime instead (see scripts/make-app / dist).
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.15", features = ["load-dynamic"] }
