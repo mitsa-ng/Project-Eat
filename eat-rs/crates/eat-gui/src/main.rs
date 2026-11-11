@@ -39,6 +39,7 @@ fn install_log_sink(state: Arc<Mutex<BatchState>>) {
     })));
 }
 
+#[derive(Clone)]
 enum OllamaStatus {
     Checking,
     Reachable(Vec<String>), // model tags
@@ -707,7 +708,9 @@ impl eframe::App for EatGui {
 
         egui::TopBottomPanel::bottom("bottom").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let status = self.ollama.lock().unwrap().take();
+                // clone（不可 take()）：take 會把狀態消費掉，之後每幀都
+                // 顯示「正在檢查」——實測卡死的原因
+                let status = self.ollama.lock().unwrap().clone();
                 match &status {
                     Some(OllamaStatus::Reachable(models)) => {
                         let is_local = self.api_url.contains("11434") || self.api_url.contains("localhost");
