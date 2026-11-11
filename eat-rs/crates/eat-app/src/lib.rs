@@ -391,7 +391,7 @@ pub fn run_batch(
                     let total: f32 = scores
                         .iter()
                         .zip(opts.rubric.dims.iter())
-                        .map(|(s, (_, m))| s.min(*m))
+                        .map(|(s, d)| s.min(d.max))
                         .sum();
                     ScoredEssay { scores, comment, total }
                 } else {
@@ -429,7 +429,7 @@ pub fn run_batch(
             .rubric
             .dims
             .iter()
-            .map(|(n, m)| format!("{}{}", n, m))
+            .map(|d| format!("{}{}", d.name, d.max))
             .collect();
         let total_max = opts.rubric.total_max();
         let mut csv = format!("essay,{},總分{},錯誤數,短評\n", dim_header.join(","), total_max);

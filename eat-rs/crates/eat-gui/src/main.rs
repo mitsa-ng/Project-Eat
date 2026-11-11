@@ -64,7 +64,7 @@ struct EatGui {
     reader: String, // "ppocr" | "vlm"
     vlm_model: String,
     rubric_criteria: String,
-    rubric_dims: Vec<(String, f32)>,
+    rubric_dims: Vec<eat_app::report::Dim>,
     state: Arc<Mutex<BatchState>>,
     ollama: Arc<Mutex<Option<OllamaStatus>>>,
     pull_running: Arc<AtomicBool>,
@@ -707,36 +707,41 @@ impl eframe::App for EatGui {
                                 .desired_width(ui.available_width()),
                         );
                     });
-                ui.horizontal(|ui| {
-                    ui.label("評分佔比：");
-                });
-                ui.horizontal(|ui| {
-                    let cols = self.rubric_dims.len().min(4);
-                    for i in 0..cols {
-                        ui.vertical(|ui| {
-                            ui.add_space(4.0);
-                            let (name, max) = self.rubric_dims[i].clone();
-                            let mut name_buf = name.clone();
-                            let mut max_buf = max.to_string();
-                            ui.add(egui::TextEdit::singleline(&mut name_buf).desired_width(90.0));
-                            ui.add(egui::TextEdit::singleline(&mut max_buf).desired_width(60.0));
-                            if name_buf != name || max_buf != max.to_string() {
-                                self.rubric_dims[i] = (
-                                    name_buf,
-                                    max_buf.trim().parse::<f32>().unwrap_or(max),
-                                );
+                ui.label("評分佔比（點開每格寫自己的標準）：");
+                let n_dims = self.rubric_dims.len();
+                for i in 0..n_dims {
+                    let d = self.rubric_dims[i].clone();
+                    let header = format!("{} — {:.0} 分", d.name, d.max);
+                    egui::CollapsingHeader::new(header)
+                        .default_open(false)
+                        .id_salt(format!("dim{}", i))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("名稱");
+                                let mut name = d.name.clone();
+                                ui.add(egui::TextEdit::singleline(&mut name).desired_width(90.0));
+                                ui.label("滿分");
+                                let mut max = d.max.to_string();
+                                ui.add(egui::TextEdit::singleline(&mut max).desired_width(60.0));
+                                if name != d.name || max != d.max.to_string() {
+                                    self.rubric_dims[i].name = name;
+                                    self.rubric_dims[i].max = max.trim().parse::<f32>().unwrap_or(d.max);
+                                }
+                            });
+                            ui.label("此項標準（會直接餵給 AI）：");
+                            let mut desc = d.desc.clone();
+                            ui.add(
+                                egui::TextEdit::multiline(&mut desc)
+                                    .desired_rows(3)
+                                    .desired_width(ui.available_width()),
+                            );
+                            if desc != d.desc {
+                                self.rubric_dims[i].desc = desc;
                             }
                         });
-                        if i + 1 < cols {
-                            ui.separator();
-                        }
-                    }
-                    let total: f32 = self.rubric_dims.iter().map(|(_, m)| m).sum();
-                    ui.vertical(|ui| {
-                        ui.add_space(4.0);
-                        ui.strong(format!("滿分 {:.0}", total));
-                    });
-                });
+                }
+                let total: f32 = self.rubric_dims.iter().map(|d| d.max).sum();
+                ui.strong(format!("滿分 {:.0}", total));
             });
 
             ui.add_space(8.0);
@@ -870,7 +875,7 @@ fn rubric_path() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("eat-rubric.json"))
 }
 
-fn save_rubric(criteria: &str, dims: &[(String, f32)]) {
+fn save_rubric(criteria: &str, dims: &[eat_app::report::Dim]) {
     let cfg = eat_app::report::RubricCfg {
         criteria: criteria.to_string(),
         dims: dims.to_vec(),
