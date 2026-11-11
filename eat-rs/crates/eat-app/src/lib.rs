@@ -235,14 +235,9 @@ pub fn run_pipeline(args: &PipelineOpts) -> Result<String, PipelineError> {
         );
     } else {
         for (i, e) in errors.iter().enumerate() {
-            let pg = match e.page {
-                Some(p) => format!("p{} ", p + 1),
-                None => String::new(),
-            };
             logging::info(&format!(
-                "  {:3}. {}[{:8}] {:?} → {:?}",
+                "  {:3}. [{:8}] {:?} → {:?}",
                 i + 1,
-                pg,
                 e.kind,
                 e.original,
                 e.suggestion

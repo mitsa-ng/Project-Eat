@@ -1151,7 +1151,9 @@ dependencies = [
  "eat-core",
  "eat-ocr",
  "eat-pdf",
+ "serde",
  "serde_json",
+ "ureq 2.12.1",
  "zip",
 ]
 
