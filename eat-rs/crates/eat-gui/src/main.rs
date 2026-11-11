@@ -587,6 +587,8 @@ impl EatGui {
         if !ctx.wants_keyboard_input() {
             let left = ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             let right = ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
+            let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
             if right && self.browse.index + 1 < self.browse.entries.len() {
                 self.browse.index += 1;
                 self.browse.reload_current();
@@ -594,6 +596,12 @@ impl EatGui {
             if left && self.browse.index > 0 {
                 self.browse.index -= 1;
                 self.browse.reload_current();
+            }
+            if up {
+                self.browse.rotation = (self.browse.rotation + 1) % 4; // 順時針 90°
+            }
+            if down {
+                self.browse.rotation = (self.browse.rotation + 3) % 4; // 逆時針 90°
             }
         }
 
@@ -634,6 +642,12 @@ impl EatGui {
                 if ui.button("◀").clicked() && self.browse.index > 0 {
                     self.browse.index -= 1;
                     self.browse.reload_current();
+                }
+                if self.browse.rotation != 0 {
+                    let deg = self.browse.rotation * 90;
+                    if ui.button(format!("↺ {}°", deg)).clicked() {
+                        self.browse.rotation = 0;
+                    }
                 }
             });
         });
@@ -1045,6 +1059,8 @@ struct BrowseState {
     texture: Option<egui::TextureHandle>,
     texture_key: String,
     err_list: Vec<eat_core::nlp::EatError>,
+    /// 原稿旋轉（0-3，每次＝順時針 90°；↑=+90、↓=-90）
+    rotation: u32,
 }
 
 impl Default for BrowseState {
@@ -1056,6 +1072,7 @@ impl Default for BrowseState {
             texture: None,
             texture_key: String::new(),
             err_list: Vec::new(),
+            rotation: 0,
         }
     }
 }
@@ -1120,15 +1137,16 @@ impl BrowseState {
                 return;
             }
         };
-        let key = entry.pdf.to_string_lossy().into_owned();
+        let key = format!("{}|rot{}", entry.pdf.to_string_lossy(), self.rotation % 4);
         if self.texture_key != key {
+            let pdf_path = entry.pdf.to_string_lossy().into_owned();
             match eat_app::shared_pdf() {
                 Ok(pdf) => {
                     // 全部頁面垂直串接（作文多為一頁）
                     let count = 4usize; // 上限掃 4 頁
                     let mut imgs: Vec<(u32, u32, Vec<u8>)> = Vec::new();
                     for i in 0..count {
-                        match pdf.render_page_rgb(&key, i as i32, 110.0) {
+                        match pdf.render_page_rgb(&pdf_path, i as i32, 110.0) {
                             Ok((w, h, rgb)) => imgs.push((w, h, rgb)),
                             Err(_) => break,
                         }
@@ -1151,12 +1169,20 @@ impl BrowseState {
                         for px in canvas.chunks_exact(3) {
                             rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
                         }
+                        let (rgba, total_w, total_h) = rotate_rgba_cw(
+                            rgba,
+                            total_w as usize,
+                            total_h as usize,
+                            self.rotation as usize % 4,
+                        );
+                        let total_w = total_w as u32;
+                        let total_h = total_h as u32;
                         let img = egui::ColorImage::from_rgba_unmultiplied(
                             [total_w as usize, total_h as usize],
                             &rgba,
                         );
                         self.texture = Some(ui.ctx().load_texture("browse-page", img, egui::TextureOptions::LINEAR));
-                        self.texture_key = key;
+                        self.texture_key = format!("{}|rot{}", key, self.rotation % 4);
                     }
                 }
                 Err(e) => {
@@ -1172,6 +1198,28 @@ impl BrowseState {
             });
         }
     }
+}
+
+/// RGBA 緩衝順時針旋轉 n 次 90°（像素級，瀏覽原稿用）。
+fn rotate_rgba_cw(data: Vec<u8>, w: usize, h: usize, times: usize) -> (Vec<u8>, usize, usize) {
+    let mut out = data;
+    let (mut ow, mut oh) = (w, h);
+    for _ in 0..times {
+        let (nw, nh) = (oh, ow);
+        let mut next = vec![0u8; out.len()];
+        for y in 0..oh {
+            for x in 0..ow {
+                let (nx, ny) = (oh - 1 - y, x);
+                let src = (y * ow + x) * 4;
+                let dst = (ny * nw + nx) * 4;
+                next[dst..dst + 4].copy_from_slice(&out[src..src + 4]);
+            }
+        }
+        out = next;
+        ow = nw;
+        oh = nh;
+    }
+    (out, ow, oh)
 }
 
 fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
