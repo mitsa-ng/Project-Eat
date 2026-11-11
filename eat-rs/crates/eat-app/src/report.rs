@@ -43,26 +43,71 @@ pub fn sentence_errors<'a>(pages: &Pages, errors: &'a [EatError], language: &str
     out
 }
 
-/// 規準評分（Standard 1/2 重建，滿分 30）。只評學生手寫段落，忽略
-/// 試卷表單文字（說明、題目、點數、頁碼）。
-pub fn grade(text: &str, err_count: usize, model: &str, url: &str) -> Grade {
-    const RUBRIC: &str = r#"You are grading an in-class English paragraph writing exam (English Composition III Midterm, PART 4) using the official grading rubric below. Grade ONLY the student's handwritten paragraph; ignore exam-form furniture in the OCR text (instructions, prompts, rubric wording, point values, page numbers).
+/// 可設定批改規準：評分說明文字＋各維度佔比（名稱與滿分）。
+/// 預設＝Standard 1/2 重建的 30 分制（主題句6／支持句8／文法10／結論6）。
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct RubricCfg {
+    /// 給模型的評分說明（批改標準本文）
+    pub criteria: String,
+    /// 評分維度（名稱, 滿分）。滿分可自由調整，總分＝各維度之和。
+    pub dims: Vec<(String, f32)>,
+}
 
-GRADING RUBRIC (30 points total):
-- Topic Sentence (6 pts): clear topic + controlling idea.
-- Supporting Sentences & Unity (8 pts): 5-6+ detailed sentences with specific details/facts/examples; strictly on topic; no fragments; correct count/non-count nouns; clear pronouns; formal tone.
-- Grammar & Academic Diction (10 pts): grammar correctness, spelling, academic word choice.
-- Concluding Sentence (6 pts): logical conclusion/restatement using an appropriate transition signal (e.g., Overall, In conclusion, Therefore).
+impl Default for RubricCfg {
+    fn default() -> Self {
+        RubricCfg {
+            criteria: DEFAULT_CRITERIA.to_string(),
+            dims: vec![
+                ("主題句".into(), 6.0),
+                ("支持句".into(), 8.0),
+                ("文法".into(), 10.0),
+                ("結論句".into(), 6.0),
+            ],
+        }
+    }
+}
 
-WRITING REQUIREMENTS: paragraph of at least 8 sentences (approx. 100-150 words).
+pub const DEFAULT_CRITERIA: &str = r#"Grade the student's handwritten paragraph (ignore exam-form furniture: instructions, prompts, point values, page numbers).
+- 主題句 Topic Sentence: clear topic + controlling idea.
+- 支持句 Supporting Sentences & Unity: 5-6+ detailed sentences with specific details/facts/examples; strictly on topic; no fragments; correct count/non-count nouns; clear pronouns; formal tone.
+- 文法 Grammar & Academic Diction: grammar correctness, spelling, academic word choice.
+- 結論句 Concluding Sentence: logical conclusion/restatement using an appropriate transition signal (e.g., Overall, In conclusion, Therefore).
+Writing requirement: at least 8 sentences (approx. 100-150 words)."#;
 
-OUTPUT: ONLY a JSON object, no other text:
-{"topic_sentence": <0-6>, "supporting_unity": <0-8>, "grammar_diction": <0-10>, "concluding": <0-6>, "total": <0-30>, "comment": "<繁體中文 40-60 字短評：優點與最大改進方向>"}
-"#;
+impl RubricCfg {
+    pub fn total_max(&self) -> f32 {
+        self.dims.iter().map(|(_, m)| *m).sum()
+    }
+}
+
+#[derive(serde::Deserialize, Debug, Clone, Default)]
+struct RawGrade {
+    #[serde(default)]
+    d: Vec<f32>,
+    #[serde(default)]
+    comment: String,
+}
+
+/// 依規準評分。回傳各維度得分（順序同 dims）＋短評。
+pub fn grade_with(rubric: &RubricCfg, text: &str, err_count: usize, model: &str, url: &str) -> (Vec<f32>, String) {
+    let n = rubric.dims.len();
+    let dim_lines: Vec<String> = rubric
+        .dims
+        .iter()
+        .enumerate()
+        .map(|(i, (name, max))| format!("- d{} \"{}\": 0-{} points", i, name, max))
+        .collect();
+    let keys: Vec<String> = (0..n).map(|i| format!("\"d{}\": <0-max>", i)).collect();
+    let system = format!(
+        "You are grading a student essay paragraph using the teacher's rubric below.\n\nGRADING CRITERIA:\n{}\n\nDIMENSIONS:\n{}\n\nOUTPUT: ONLY a JSON object, no other text:\n{{{}, \"comment\": \"<繁體中文 40-60 字短評：優點與最大改進方向>\"}}\nScore each dimension honestly; do not inflate.",
+        rubric.criteria,
+        dim_lines.join("\n"),
+        keys.join(", ")
+    );
     let payload = serde_json::json!({
         "model": model,
-        "prompt": format!("ESSAY OCR TEXT:\n{}\n\n(An automatic checker found {} spelling/grammar issues in this essay.)", text, err_count),
-        "system": RUBRIC,
+        "prompt": format!("ESSAY OCR TEXT:\n{}\n\n(An automatic checker found {} spelling/grammar issues.)", text, err_count),
+        "system": system,
         "stream": false,
         "options": {"temperature": 0, "num_predict": 512}
     });
@@ -78,15 +123,31 @@ OUTPUT: ONLY a JSON object, no other text:
             if let Ok(v) = resp.into_json::<serde_json::Value>() {
                 let raw = v.get("response").and_then(|r| r.as_str()).unwrap_or("");
                 if let (Some(a), Some(b)) = (raw.find('{'), raw.rfind('}')) {
-                    if let Ok(g) = serde_json::from_str::<Grade>(&raw[a..=b]) {
-                        return g;
+                    if let Ok(g) = serde_json::from_str::<serde_json::Value>(&raw[a..=b]) {
+                        // 抓 d0..dN（也可能放在巢狀）
+                        let mut scores = Vec::with_capacity(n);
+                        for i in 0..n {
+                            let key = format!("d{}", i);
+                            let val = g.get(&key).and_then(|x| x.as_f64()).or_else(|| {
+                                g.get("scores").and_then(|s| s.get(&key)).and_then(|x| x.as_f64())
+                            });
+                            scores.push(val.unwrap_or(0.0) as f32);
+                        }
+                        let comment = g
+                            .get("comment")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        return (scores, comment);
                     }
                 }
             }
         }
     }
-    Grade::default()
+    (vec![0.0; n], String::new())
 }
+
+// ── 舊介面相容（沿用 default 規準）────────────────────────────────────────
 
 #[derive(serde::Deserialize, Debug, Clone, Default)]
 pub struct Grade {

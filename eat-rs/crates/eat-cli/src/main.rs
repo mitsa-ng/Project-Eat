@@ -78,6 +78,7 @@ fn main() {
         reader: args.reader,
         vlm_model: args.vlm_model,
         score: args.score,
+        rubric: eat_app::report::RubricCfg::default(),
     };
     if let Err(e) = eat_app::run_pipeline(&opts) {
         eat_core::logging::error(&e.0);

@@ -63,6 +63,8 @@ struct EatGui {
     save_intermediate: bool,
     reader: String, // "ppocr" | "vlm"
     vlm_model: String,
+    rubric_criteria: String,
+    rubric_dims: Vec<(String, f32)>,
     state: Arc<Mutex<BatchState>>,
     ollama: Arc<Mutex<Option<OllamaStatus>>>,
     pull_running: Arc<AtomicBool>,
@@ -107,6 +109,8 @@ impl EatGui {
             save_intermediate: false,
             reader: "vlm".into(),
             vlm_model: "qwen2.5vl:7b".into(),
+            rubric_criteria: default_rubric().criteria.clone(),
+            rubric_dims: default_rubric().dims.clone(),
             state,
             ollama: Arc::new(Mutex::new(Some(OllamaStatus::Checking))),
             pull_running: Arc::new(AtomicBool::new(false)),
@@ -480,12 +484,17 @@ impl EatGui {
     }
 
     fn spawn_batch(&self) {
+        save_rubric(&self.rubric_criteria, &self.rubric_dims);
         let opts = PipelineOpts {
             input_pdf: None,
             output: None,
             reader: self.reader.clone(),
             vlm_model: self.vlm_model.clone(),
             score: true,
+            rubric: eat_app::report::RubricCfg {
+                criteria: self.rubric_criteria.clone(),
+                dims: self.rubric_dims.clone(),
+            },
             model: Some(self.model.clone()),
             ollama_url: Some(self.ollama_url.clone()),
             language: Some(self.language.clone()),
@@ -679,6 +688,57 @@ impl eframe::App for EatGui {
                 });
             });
 
+            ui.add_space(6.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.strong("批改標準");
+                    if ui.button("重設預設").clicked() {
+                        self.rubric_criteria = eat_app::report::RubricCfg::default().criteria;
+                        self.rubric_dims = eat_app::report::RubricCfg::default().dims;
+                    }
+                });
+                egui::CollapsingHeader::new("評分說明（給 AI 的批改標準）")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.rubric_criteria)
+                                .desired_rows(6)
+                                .desired_width(ui.available_width()),
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("評分佔比：");
+                });
+                ui.horizontal(|ui| {
+                    let cols = self.rubric_dims.len().min(4);
+                    for i in 0..cols {
+                        ui.vertical(|ui| {
+                            ui.add_space(4.0);
+                            let (name, max) = self.rubric_dims[i].clone();
+                            let mut name_buf = name.clone();
+                            let mut max_buf = max.to_string();
+                            ui.add(egui::TextEdit::singleline(&mut name_buf).desired_width(90.0));
+                            ui.add(egui::TextEdit::singleline(&mut max_buf).desired_width(60.0));
+                            if name_buf != name || max_buf != max.to_string() {
+                                self.rubric_dims[i] = (
+                                    name_buf,
+                                    max_buf.trim().parse::<f32>().unwrap_or(max),
+                                );
+                            }
+                        });
+                        if i + 1 < cols {
+                            ui.separator();
+                        }
+                    }
+                    let total: f32 = self.rubric_dims.iter().map(|(_, m)| m).sum();
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.strong(format!("滿分 {:.0}", total));
+                    });
+                });
+            });
+
             ui.add_space(8.0);
             let can_run = !self.input_folder.is_empty()
                 && !self.zip_out.is_empty()
@@ -794,6 +854,29 @@ impl eframe::App for EatGui {
                     }
                 });
         });
+    }
+}
+
+fn default_rubric() -> eat_app::report::RubricCfg {
+    match std::fs::read_to_string(rubric_path()) {
+        Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
+        Err(_) => eat_app::report::RubricCfg::default(),
+    }
+}
+
+fn rubric_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join("eat-rubric.json"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("eat-rubric.json"))
+}
+
+fn save_rubric(criteria: &str, dims: &[(String, f32)]) {
+    let cfg = eat_app::report::RubricCfg {
+        criteria: criteria.to_string(),
+        dims: dims.to_vec(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+        let _ = std::fs::write(rubric_path(), json);
     }
 }
 

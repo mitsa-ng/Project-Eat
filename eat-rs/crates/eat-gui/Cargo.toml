@@ -14,5 +14,6 @@ eat-core = { path = "../eat-core" }
 eframe = "0.33"
 eat-ocr = { path = "../eat-ocr" }
 image = { workspace = true }
+serde_json = { workspace = true }
 rfd = "0.15"
 nokhwa = { version = "0.10", features = ["input-native"] }

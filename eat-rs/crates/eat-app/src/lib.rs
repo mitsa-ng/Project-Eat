@@ -51,8 +51,10 @@ pub struct PipelineOpts {
     /// 逐行精讀，手寫準確度大幅提升）。det（行框）一律用本機 PP-OCR。
     pub reader: String,
     pub vlm_model: String,
-    /// 依 Standard 1/2 規則評分（滿分 30）並產出批改報表 CSV。
+    /// 評分並產出批改報表 CSV。
     pub score: bool,
+    /// 批改標準（文字＋各維度佔比）。預設＝Standard 1/2 的 30 分制。
+    pub rubric: report::RubricCfg,
 }
 
 fn vlm_model_name(opts: &PipelineOpts) -> String {
@@ -315,7 +317,13 @@ pub fn run_batch(
         suggestion: String,
     }
     let mut detail_rows: Vec<DetailRow> = Vec::new();
-    let mut score_rows: Vec<(String, report::Grade)> = Vec::new();
+    #[derive(Clone, Default)]
+    struct ScoredEssay {
+        scores: Vec<f32>,
+        comment: String,
+        total: f32,
+    }
+    let mut score_rows: Vec<(String, ScoredEssay)> = Vec::new();
     let mut pdfs: Vec<PathBuf> = std::fs::read_dir(input_dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
@@ -373,14 +381,21 @@ pub fn run_batch(
                         .map(|w| eat_core::words::words_to_text(w, &language))
                         .collect::<Vec<_>>()
                         .join(" ");
-                    report::grade(
+                    let (scores, comment) = report::grade_with(
+                        &opts.rubric,
                         &text,
                         err_list.len(),
                         &o.model.clone().unwrap_or_else(default_model_name),
                         &o.ollama_url.clone().unwrap_or_else(default_ollama_url),
-                    )
+                    );
+                    let total: f32 = scores
+                        .iter()
+                        .zip(opts.rubric.dims.iter())
+                        .map(|(s, (_, m))| s.min(*m))
+                        .sum();
+                    ScoredEssay { scores, comment, total }
                 } else {
-                    report::Grade::default()
+                    ScoredEssay::default()
                 };
                 for (sent, hits) in report::sentence_errors(&pages, &err_list, &language) {
                     for e in hits {
@@ -410,16 +425,23 @@ pub fn run_batch(
     // 批改報表（評分總表＋句級錯誤明細），與標註 PDF 一起進 ZIP
     if opts.score && !score_rows.is_empty() {
         let esc = |t: &str| t.replace('"', "'");
-        let mut csv = String::from("essay,主題句6,支持句8,文法10,結論6,總分30,錯誤數,短評\n");
+        let dim_header: Vec<String> = opts
+            .rubric
+            .dims
+            .iter()
+            .map(|(n, m)| format!("{}{}", n, m))
+            .collect();
+        let total_max = opts.rubric.total_max();
+        let mut csv = format!("essay,{},總分{},錯誤數,短評\n", dim_header.join(","), total_max);
         for (name, g) in &score_rows {
             let errs = detail_rows.iter().filter(|d| d.essay == *name).count();
+            let mut row = name.clone();
+            for sc in &g.scores {
+                row.push_str(&format!(",{}", sc));
+            }
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},\"{}\"\n",
-                name,
-                g.topic_sentence,
-                g.supporting_unity,
-                g.grammar_diction,
-                g.concluding,
+                "{},{},{},\"{}\"\n",
+                row,
                 g.total,
                 errs,
                 esc(&g.comment)
