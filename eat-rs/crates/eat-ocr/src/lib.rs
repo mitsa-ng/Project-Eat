@@ -134,6 +134,74 @@ impl VlmReader {
         }
         Some(text)
     }
+    /// 堆疊所有行裁切為一張圖、單一請求轉錄，回傳模型原始輸出行
+    /// （不做行數假設——對齊由 align_vlm_lines 以 PP-OCR 基準讀取完成）。
+    pub fn read_stack(&self, crops: &[Img]) -> Result<Vec<String>, String> {
+        if crops.is_empty() {
+            return Ok(Vec::new());
+        }
+        const H: usize = 56;
+        const MAX_W: usize = 1600;
+        const GAP: usize = 8;
+        let normalized: Vec<Img> = crops
+            .iter()
+            .map(|c| {
+                let w = ((c.w as f64 * H as f64 / c.h as f64) as usize).clamp(16, MAX_W);
+                if c.w == w && c.h == H { c.clone() } else { c.resize(w, H) }
+            })
+            .collect();
+        let total_w = normalized.iter().map(|c| c.w).max().unwrap_or(16).max(16);
+        let total_h = normalized.len() * H + GAP * (normalized.len().saturating_sub(1));
+        let mut canvas = Img::from_rgb(total_w, total_h, &vec![255u8; total_w * total_h * 3]);
+        let mut y = 0usize;
+        for c in &normalized {
+            for dy in 0..H {
+                for dx in 0..c.w {
+                    let o = ((y + dy) * total_w + dx) * 3;
+                    let s0 = (dy * c.w + dx) * 3;
+                    canvas.data[o] = c.data[s0];
+                    canvas.data[o + 1] = c.data[s0 + 1];
+                    canvas.data[o + 2] = c.data[s0 + 2];
+                }
+            }
+            y += H + GAP;
+        }
+        let buf = image::RgbImage::from_raw(canvas.w as u32, canvas.h as u32, canvas.data.clone())
+            .ok_or("canvas too large")?;
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(buf)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let payload = serde_json::json!({
+            "model": self.model,
+            "prompt": "The image contains text lines stacked top to bottom, separated by thin white gaps. Transcribe every line exactly in order from top to bottom, one output line per input line. Keep the original spelling including any mistakes. Do not merge, skip, or add lines. No commentary.",
+            "images": [b64],
+            "stream": false,
+            "options": {"temperature": 0, "num_predict": 4096, "num_ctx": 16384}
+        });
+        let resp = self
+            .agent
+            .post(&self.url)
+            .timeout(std::time::Duration::from_secs(900))
+            .send_json(payload)
+            .map_err(|e| format!("ollama: {}", e))?;
+        let v: serde_json::Value = resp.into_json().map_err(|e| format!("json: {}", e))?;
+        let text = v
+            .get("response")
+            .and_then(|t| t.as_str())
+            .ok_or("no response")?;
+        Ok(text
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == ':' || c == ' ').trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
 }
 
 pub struct RapidOcr {
@@ -373,94 +441,75 @@ impl RapidOcr {
         Ok(db_postprocess(&pred, pw, ph, img.w, img.h))
     }
 
-    /// 混合模式：PP-OCR det（行框）+ VLM 逐行轉錄。
-    /// 回傳行（score=1.0；VLM 不提供信心值）。flip-retry 不需要——VLM
-    /// 天生處理顛倒文字。
+    /// 混合模式（v2）：PP-OCR 全量讀取（快、提供行框＋基準文字＋信心）
+    /// → 所有行堆疊成單張圖送 VLM 校正（一次請求）→ 以文字相似度把
+    /// VLM 行對齊回 PP-OCR 行。VLM 版本替換基準讀取（手寫品質大幅較佳，
+    /// 實測 fob→job、situatlon→situation）；對不上的行保留 PP-OCR 原讀。
+    /// 失敗（模型缺失/傳輸錯誤）時直接回傳 PP-OCR 結果——掃描仍可完成。
     pub fn run_with_reader(&mut self, img_bgr: &Img, vlm: &VlmReader) -> Result<Vec<OcrLine>, OcrError> {
         if img_bgr.w < 2 || img_bgr.h < 2 {
             return Ok(Vec::new());
         }
-        let scale = if img_bgr.w.max(img_bgr.h) > MAX_SIDE_LEN {
-            MAX_SIDE_LEN as f64 / img_bgr.w.max(img_bgr.h) as f64
-        } else {
-            1.0
-        };
-        let img = if scale < 1.0 {
-            img_bgr.resize(
-                ((img_bgr.w as f64 * scale) as usize).max(1),
-                ((img_bgr.h as f64 * scale) as usize).max(1),
-            )
-        } else {
-            img_bgr.clone()
-        };
-        let boxes = self.detect(&img)?;
-        if boxes.is_empty() {
-            return Ok(Vec::new());
+        // 1) PP-OCR base pass (det + rec + flip-fix, all local & fast)
+        let base = self.run(img_bgr)?;
+        if base.is_empty() {
+            return Ok(base);
         }
-        let mut sorted = boxes;
-        sorted.sort_by(|a, b| {
-            let (ya, yb) = (a[0].1, b[0].1);
-            (ya / BOX_SORT_Y_THRESHOLD)
-                .partial_cmp(&(yb / BOX_SORT_Y_THRESHOLD))
-                .unwrap()
-                .then(a[0].0.partial_cmp(&b[0].0).unwrap())
-        });
 
-        let inv = 1.0 / scale;
-        let mut out = Vec::new();
-        for b in &sorted {
-            let crop = img_bgr.perspective_crop([
-                Pt::new(b[0].0, b[0].1),
-                Pt::new(b[1].0, b[1].1),
-                Pt::new(b[2].0, b[2].1),
-                Pt::new(b[3].0, b[3].1),
-            ]);
-            // Img 是 BGR；VLM 要 RGB PNG。控制 image tokens：行高縮放到
-            // ≤64px（保持可讀）、寬度上限 2000px（超長行等比縮）。
-            // 注意行條的寬高比極大（~50:1），用「先高後寬」順序才不會
-            // 把字壓扁（先前只限寬 640 → 行高剩 13px → 不可讀）。
-            let crop = if crop.h > 64 {
-                let nw = ((crop.w as f64 * 64.0 / crop.h as f64) as usize).max(16);
-                crop.resize(nw.min(2000), 64)
-            } else if crop.w > 2000 {
-                crop.resize(2000, ((crop.h as f64 * 2000.0 / crop.w as f64) as usize).max(16))
-            } else {
-                crop
-            };
-            let rgb = bgr_to_rgb(&crop);
-            let png: Vec<u8> = {
-                let buf = image::RgbImage::from_raw(rgb.w as u32, rgb.h as u32, rgb.data.clone())
-                    .unwrap_or_default();
-                let mut out = Vec::new();
-                let dynimg = image::DynamicImage::ImageRgb8(buf);
-                if dynimg.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).is_err() {
+        // 2) single stacked VLM request over the base line boxes
+        let crops: Vec<Img> = base
+            .iter()
+            .map(|l| {
+                img_bgr.perspective_crop([
+                    Pt::new(l.box_[0].0, l.box_[0].1),
+                    Pt::new(l.box_[1].0, l.box_[1].1),
+                    Pt::new(l.box_[2].0, l.box_[2].1),
+                    Pt::new(l.box_[3].0, l.box_[3].1),
+                ])
+            })
+            .collect();
+        let vlm_lines = match vlm.read_stack(&crops) {
+            Ok(l) => l,
+            Err(e) => {
+                eat_core::logging::warn(&format!("  VLM 校正失敗（{}）— 使用 PP-OCR 結果", e));
+                return Ok(base);
+            }
+        };
+        eat_core::logging::info(&format!(
+            "  VLM 校正：{} 行回傳（PP-OCR 基準 {} 行），對齊中 …",
+            vlm_lines.len(),
+            base.len()
+        ));
+
+        // 3) greedy alignment by normalized text similarity
+        let mut out = base.clone();
+        let mut used = vec![false; vlm_lines.len()];
+        let mut improved = 0usize;
+        for line in &mut out {
+            let mut best: Option<(f64, usize)> = None;
+            for (j, vl) in vlm_lines.iter().enumerate() {
+                if used[j] {
                     continue;
                 }
-                out
-            };
-            match vlm.read_line(&png) {
-                Some(text) => {
-                    if text.trim().is_empty() {
-                        continue;
-                    }
-                    out.push(OcrLine {
-                        box_: [
-                            (b[0].0 * inv, b[0].1 * inv),
-                            (b[1].0 * inv, b[1].1 * inv),
-                            (b[2].0 * inv, b[2].1 * inv),
-                            (b[3].0 * inv, b[3].1 * inv),
-                        ],
-                        text,
-                        score: 1.0,
-                    });
+                let sim = text_similarity(&line.text, vl);
+                if best.map(|(b, _)| sim > b).unwrap_or(true) {
+                    best = Some((sim, j));
                 }
-                None => continue,
+            }
+            if let Some((sim, j)) = best {
+                if sim >= 0.35 {
+                    used[j] = true;
+                    line.text = vlm_lines[j].clone();
+                    line.score = 1.0;
+                    improved += 1;
+                }
             }
         }
+        eat_core::logging::info(&format!("  VLM 校正取代 {} / {} 行", improved, base.len()));
         Ok(out)
     }
 
-    // ── recognition ───────────────────────────────────────────────────────────
+    // ── recognition ─────    // ── recognition ───────────────────────────────────────────────────────────
 
     fn recognize(&mut self, crops: &[Img]) -> Result<(Vec<String>, Vec<f32>), OcrError> {
         if crops.is_empty() {
@@ -694,6 +743,27 @@ pub fn db_postprocess(
 }
 
 impl RapidOcr {
+}
+
+/// 1 - levenshtein/max_len，正規化文字相似度（對齊用）。
+fn text_similarity(a: &str, b: &str) -> f64 {
+    let a: Vec<char> = a.to_lowercase().chars().collect();
+    let b: Vec<char> = b.to_lowercase().chars().collect();
+    let (n, m) = (a.len(), b.len());
+    if n == 0 && m == 0 {
+        return 1.0;
+    }
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut cur = vec![0usize; m + 1];
+    for i in 1..=n {
+        cur[0] = i;
+        for j in 1..=m {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    1.0 - prev[m] as f64 / n.max(m) as f64
 }
 
 fn bgr_to_rgb(img: &Img) -> Img {
