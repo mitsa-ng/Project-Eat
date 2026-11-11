@@ -485,6 +485,7 @@ impl EatGui {
             output: None,
             reader: self.reader.clone(),
             vlm_model: self.vlm_model.clone(),
+            score: true,
             model: Some(self.model.clone()),
             ollama_url: Some(self.ollama_url.clone()),
             language: Some(self.language.clone()),

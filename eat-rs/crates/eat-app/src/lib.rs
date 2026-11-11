@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use eat_core::logging;
-use eat_core::nlp::{default_language, default_model_name, default_ollama_url, NlpEngine};
+use eat_core::nlp::{default_language, default_model_name, default_ollama_url, EatError, NlpEngine};
 use eat_core::words::Word;
 use eat_ocr::imgops::Img;
 use eat_ocr::RapidOcr;
@@ -18,6 +18,8 @@ use std::sync::{Mutex, OnceLock};
 static PDF_ENGINE: OnceLock<Option<EatPdf>> = OnceLock::new();
 /// PP-OCR sessions are expensive to load (~30 MB of weights); share them too.
 static OCR_ENGINE: OnceLock<Option<Mutex<RapidOcr>>> = OnceLock::new();
+
+pub mod report;
 
 pub fn shared_pdf() -> Result<&'static EatPdf, PipelineError> {
     PDF_ENGINE
@@ -49,6 +51,8 @@ pub struct PipelineOpts {
     /// 逐行精讀，手寫準確度大幅提升）。det（行框）一律用本機 PP-OCR。
     pub reader: String,
     pub vlm_model: String,
+    /// 依 Standard 1/2 規則評分（滿分 30）並產出批改報表 CSV。
+    pub score: bool,
 }
 
 fn vlm_model_name(opts: &PipelineOpts) -> String {
@@ -301,6 +305,17 @@ pub fn run_batch(
     opts: &PipelineOpts,
 ) -> (String, Vec<(String, usize, String)>) {
     let mut results: Vec<(String, usize, String)> = Vec::new();
+    #[derive(Clone)]
+    struct DetailRow {
+        essay: String,
+        total: f32,
+        sentence: String,
+        kind: String,
+        original: String,
+        suggestion: String,
+    }
+    let mut detail_rows: Vec<DetailRow> = Vec::new();
+    let mut score_rows: Vec<(String, report::Grade)> = Vec::new();
     let mut pdfs: Vec<PathBuf> = std::fs::read_dir(input_dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
@@ -309,7 +324,10 @@ pub fn run_batch(
                 // never re-process our own annotated outputs
                 .filter(|p| {
                     !p.file_stem()
-                        .map(|s| s.to_string_lossy().ends_with("_annotated"))
+                        .map(|s| {
+                            let s = s.to_string_lossy();
+                            s.ends_with("_annotated") || s.ends_with(".annotated")
+                        })
                         .unwrap_or(false)
                 })
                 .collect()
@@ -332,27 +350,106 @@ pub fn run_batch(
         o.output = Some(out.to_string_lossy().into_owned());
         match run_pipeline(&o) {
             Ok(saved) => {
-                // count errors from the run log? simpler: ask pipeline —
-                // run_pipeline returns the path; error count comes from the
-                // intermediate json when requested. For the results table we
-                // re-read the saved errors json when save_intermediate.
-                let errs = o
-                    .save_intermediate
-                    .then(|| {
-                        pdf.with_file_name(pdf.file_stem().unwrap().to_string_lossy().to_string() + "_errors.json")
-                    })
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                    .and_then(|v| v.as_array().map(|a| a.len()))
-                    .unwrap_or(0);
-                results.push((name.clone(), errs, "done".into()));
+                let stem = pdf.file_stem().unwrap().to_string_lossy().to_string();
+                let err_list: Vec<EatError> = std::fs::read_to_string(
+                    pdf.with_file_name(format!("{}_errors.json", stem)),
+                )
+                .ok()
+                .and_then(|t| serde_json::from_str::<Vec<EatError>>(&t).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| !is_form_noise(&e.original))
+                .collect();
+                let pages: eat_core::words::Pages = std::fs::read_to_string(
+                    pdf.with_file_name(format!("{}_ocr.json", stem)),
+                )
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_default();
+                let language = o.language.clone().unwrap_or_else(|| "en".into());
+                let grade = if opts.score {
+                    let text = pages
+                        .iter()
+                        .map(|w| eat_core::words::words_to_text(w, &language))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    report::grade(
+                        &text,
+                        err_list.len(),
+                        &o.model.clone().unwrap_or_else(default_model_name),
+                        &o.ollama_url.clone().unwrap_or_else(default_ollama_url),
+                    )
+                } else {
+                    report::Grade::default()
+                };
+                for (sent, hits) in report::sentence_errors(&pages, &err_list, &language) {
+                    for e in hits {
+                        detail_rows.push(DetailRow {
+                            essay: name.clone(),
+                            total: grade.total,
+                            sentence: sent.clone(),
+                            kind: e.kind.clone(),
+                            original: e.original.clone(),
+                            suggestion: e.suggestion.clone(),
+                        });
+                    }
+                }
+                results.push((name.clone(), err_list.len(), format!("done {:.0}分", grade.total)));
+                score_rows.push((name.clone(), grade));
                 out_files.push(PathBuf::from(&saved));
+                continue;
             }
+
             Err(e) => {
                 logging::error(&format!("{} — {}", name, e));
                 results.push((name.clone(), 0, format!("error: {}", e.0)));
             }
         }
+    }
+
+    // 批改報表（評分總表＋句級錯誤明細），與標註 PDF 一起進 ZIP
+    if opts.score && !score_rows.is_empty() {
+        let esc = |t: &str| t.replace('"', "'");
+        let mut csv = String::from("essay,主題句6,支持句8,文法10,結論6,總分30,錯誤數,短評\n");
+        for (name, g) in &score_rows {
+            let errs = detail_rows.iter().filter(|d| d.essay == *name).count();
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},\"{}\"\n",
+                name,
+                g.topic_sentence,
+                g.supporting_unity,
+                g.grammar_diction,
+                g.concluding,
+                g.total,
+                errs,
+                esc(&g.comment)
+            ));
+        }
+        std::fs::write(std::path::Path::new(input_dir).join(REPORT_SUMMARY), &csv).ok();
+
+        let mut dcsv = String::from("essay,總分,問題句子,類型,錯字或錯處,建議\n");
+        for d in &detail_rows {
+            let kind = match d.kind.as_str() {
+                "spelling" => "拼字",
+                "grammar" => "文法",
+                _ => "語意",
+            };
+            dcsv.push_str(&format!(
+                "{},{},\"{}\",{},\"{}\",\"{}\"\n",
+                d.essay,
+                d.total,
+                esc(&d.sentence),
+                kind,
+                esc(&d.original),
+                esc(&d.suggestion)
+            ));
+        }
+        std::fs::write(std::path::Path::new(input_dir).join(REPORT_DETAIL), &dcsv).ok();
+        logging::info(&format!(
+            "批改報表 → {} / {}",
+            std::path::Path::new(input_dir).join(REPORT_SUMMARY).display(),
+            std::path::Path::new(input_dir).join(REPORT_DETAIL).display()
+        ));
     }
 
     // pack outputs into the ZIP
@@ -374,6 +471,15 @@ pub fn run_batch(
                     Err(_) => ok = false,
                 }
             }
+            // 批改報表 CSV 一併打包
+            for report_name in [REPORT_SUMMARY, REPORT_DETAIL] {
+                let path = std::path::Path::new(input_dir).join(report_name);
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if zip.start_file(report_name, zip::write::SimpleFileOptions::default()).is_ok() {
+                        let _ = std::io::Write::write_all(&mut zip, &bytes);
+                    }
+                }
+            }
             if zip.finish().is_err() {
                 ok = false;
             }
@@ -386,4 +492,42 @@ pub fn run_batch(
         Err(e) => logging::error(&format!("Cannot create {}: {}", zip_path, e)),
     }
     (zip_path.to_string(), results)
+}
+
+const REPORT_SUMMARY: &str = "批改總表.csv";
+const REPORT_DETAIL: &str = "錯誤明細.csv";
+
+
+/// 試卷表單雜訊判定：頁碼（Page 5 of 7、第3頁、純數字）、點數標示
+/// （/20、/10、30 Points）、被數字與標點主導的片段（>60% 字元非字母
+/// 且非 CJK）——這些不是學生的寫作錯誤，不該進報表或標註。
+pub fn is_form_noise(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    if lower.starts_with("page ") || lower.contains(" page ") || lower.starts_with("第") && lower.ends_with("頁") {
+        return true;
+    }
+    if t.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    let total = t.chars().filter(|c| !c.is_whitespace()).count();
+    if total == 0 {
+        return true;
+    }
+    // 數字/標點主導（如 "/20"、"Concluding Sentence /10" 的斜線數字段）
+    if (letters as f64 / total as f64) < 0.4 {
+        return true;
+    }
+    // 結尾是 "/數字" 的點數標示
+    if let Some(pos) = t.rfind('/') {
+        let tail = &t[pos + 1..];
+        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    false
 }

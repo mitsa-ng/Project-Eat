@@ -57,6 +57,11 @@ struct Args {
     /// `ollama pull qwen2.5vl:7b`).
     #[arg(long, default_value = "qwen2.5vl:7b")]
     vlm_model: String,
+
+    /// 依 Standard 1/2 規則評分（滿分 30）。批次模式另產出批改總表＋
+    /// 錯誤明細 CSV。
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    score: bool,
 }
 
 fn main() {
@@ -72,6 +77,7 @@ fn main() {
         no_gpu: args.no_gpu,
         reader: args.reader,
         vlm_model: args.vlm_model,
+        score: args.score,
     };
     if let Err(e) = eat_app::run_pipeline(&opts) {
         eat_core::logging::error(&e.0);

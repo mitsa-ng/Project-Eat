@@ -604,7 +604,7 @@ impl NlpEngine {
 /// Python `re.split(r'(?<=[.!?])\s+|(?<=[。！？])\s*', text)` — split after
 /// `.!?` when followed by whitespace (whitespace consumed), or after `。！？`
 /// with any following whitespace consumed.
-fn split_sentences(text: &str) -> Vec<String> {
+pub fn split_sentences(text: &str) -> Vec<String> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut sentences = Vec::new();
     let mut start = 0usize;
