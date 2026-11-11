@@ -58,7 +58,8 @@ struct EatGui {
     input_folder: String,
     zip_out: String,
     model: String,
-    ollama_url: String,
+    api_url: String,
+    api_key: String,
     language: String,
     save_intermediate: bool,
     reader: String, // "ppocr" | "vlm"
@@ -106,7 +107,8 @@ impl EatGui {
             input_folder: String::new(),
             zip_out: String::new(),
             model: default_model_name(),
-            ollama_url: default_ollama_url(),
+            api_url: default_ollama_url(),
+            api_key: String::new(),
             language: default_language(),
             save_intermediate: false,
             reader: "vlm".into(),
@@ -189,24 +191,16 @@ const CJK_FONT_FILE: &str = "NotoSansCJKtc-Regular.otf";
 
 impl EatGui {
     fn spawn_ollama_check(&self) {
-        let url = self.ollama_url.clone();
+        let url = self.api_url.clone();
+        let key = if self.api_key.trim().is_empty() { None } else { Some(self.api_key.trim().to_string()) };
         let ollama = self.ollama.clone();
         std::thread::spawn(move || {
-            let tags_url = url
-                .replace("/api/generate", "/api/tags")
-                .trim_end_matches('/')
-                .to_string();
-            let tags_url = if tags_url.contains("/api/tags") {
-                tags_url
+            let (ok, models, msg) = eat_core::NlpEngine::check_endpoint(&url, key.as_deref());
+            let status = if ok {
+                OllamaStatus::Reachable(models)
             } else {
-                format!("{}/api/tags", tags_url)
-            };
-            let status = match ureq_local::get(&tags_url) {
-                Ok(body) => {
-                    let models: Vec<String> = serde_json_parse_models(&body);
-                    OllamaStatus::Reachable(models)
-                }
-                Err(_) => OllamaStatus::Unreachable,
+                let _ = msg;
+                OllamaStatus::Unreachable
             };
             *ollama.lock().unwrap() = Some(status);
         });
@@ -251,7 +245,7 @@ impl EatGui {
         eat_core::logging::info("開始下載 Ollama 安裝包（Ollama-darwin.zip，約 229 MB）…");
         let install = self.install.clone();
         let ollama = self.ollama.clone();
-        let url = self.ollama_url.clone();
+        let url = self.api_url.clone();
         std::thread::spawn(move || {
             let set = |st: InstallState| *install.lock().unwrap() = st;
             let zip = std::env::temp_dir().join("Ollama-darwin.zip");
@@ -388,7 +382,7 @@ impl EatGui {
         self.live.result_rx = result_rx;
         let language = self.language.clone();
         let model = self.model.clone();
-        let url = self.ollama_url.clone();
+        let url = self.api_url.clone();
 
         std::thread::spawn(move || {
             use nokhwa::Camera;
@@ -510,7 +504,9 @@ impl EatGui {
                 dims: self.rubric_dims.clone(),
             },
             model: Some(self.model.clone()),
-            ollama_url: Some(self.ollama_url.clone()),
+            api_url: Some(self.api_url.clone()),
+            api_key: if self.api_key.trim().is_empty() { None } else { Some(self.api_key.trim().to_string()) },
+            ollama_url: None,
             language: Some(self.language.clone()),
             save_intermediate: true, // error counts for the results table
             no_spell_correct: true,
@@ -714,7 +710,9 @@ impl eframe::App for EatGui {
                 let status = self.ollama.lock().unwrap().take();
                 match &status {
                     Some(OllamaStatus::Reachable(models)) => {
-                        ui.colored_label(egui::Color32::from_rgb(0x2e, 0x7d, 0x32), "● Ollama 已連線");
+                        let is_local = self.api_url.contains("11434") || self.api_url.contains("localhost");
+                        let label = if is_local { "● 本地 Ollama 已連線" } else { "● API 已連線" };
+                        ui.colored_label(egui::Color32::from_rgb(0x2e, 0x7d, 0x32), label);
                         if models.is_empty() {
                             ui.colored_label(egui::Color32::from_rgb(0xb2, 0x6a, 0x00), "— 尚未下載模型");
                             if ui.button("下載預設模型 qwen2.5:7b（4.7 GB）").clicked() {
@@ -806,7 +804,7 @@ impl eframe::App for EatGui {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Ollama URL");
-                    ui.text_edit_singleline(&mut self.ollama_url);
+                    ui.text_edit_singleline(&mut self.api_url);
                 });
                 ui.horizontal(|ui| {
                     ui.label("掃描讀取引擎");

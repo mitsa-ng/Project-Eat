@@ -65,6 +65,7 @@ impl std::fmt::Display for NlpError {
 pub struct NlpEngine {
     pub model: String,
     pub ollama_url: String,
+    pub api_key: Option<String>,
     pub language: String,
     system_prompt: &'static str,
     agent: ureq::Agent,
@@ -72,16 +73,133 @@ pub struct NlpEngine {
 
 impl NlpEngine {
     pub fn new(model: &str, ollama_url: &str, language: &str) -> Self {
+        Self::with_key(model, ollama_url, None, language)
+    }
+
+    pub fn with_key(model: &str, ollama_url: &str, api_key: Option<&str>, language: &str) -> Self {
         let language = normalize(language).to_string();
         NlpEngine {
             model: model.to_string(),
             ollama_url: ollama_url.to_string(),
+            api_key: api_key.map(|s| s.to_string()),
             system_prompt: get_system_prompt(&language),
             agent: ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(30))
                 .timeout_read(Duration::from_secs(600))
                 .build(),
             language,
+        }
+    }
+
+    /// 偵測 API 類型：URL 含 /api/generate → Ollama；否則視為
+    /// OpenAI-compatible（/v1/chat/completions）。
+    fn is_ollama(&self) -> bool {
+        self.ollama_url.contains("/api/generate")
+    }
+
+    /// 組請求（Ollama 或 OpenAI 格式）
+    fn build_request(&self, text: &str) -> serde_json::Value {
+        if self.is_ollama() {
+            serde_json::json!({
+                "model": self.model,
+                "prompt": text,
+                "system": self.system_prompt,
+                "stream": true,
+                "options": { "temperature": TEMPERATURE, "num_predict": MAX_TOKENS }
+            })
+        } else {
+            // OpenAI-compatible chat format
+            let url = self.openai_chat_url();
+            serde_json::json!({
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": text}
+                ],
+                "temperature": TEMPERATURE,
+                "max_tokens": MAX_TOKENS as u32,
+                "stream": true
+            })
+        }
+    }
+
+    fn openai_chat_url(&self) -> String {
+        let base = self.ollama_url
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches("/v1");
+        format!("{}/v1/chat/completions", base)
+    }
+
+    /// 通用端點健康檢查：嘗試列出模型。回傳 (可達, 模型列表, 錯誤訊息)。
+    /// Ollama → /api/tags；OpenAI-compatible → /v1/models（帶 Bearer）。
+    pub fn check_endpoint(url: &str, api_key: Option<&str>) -> (bool, Vec<String>, String) {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(5))
+            .timeout_read(Duration::from_secs(10))
+            .build();
+
+        // 嘗試 Ollama
+        if url.contains("/api/generate") || url.contains("11434") {
+            let tags_url = url.replace("/api/generate", "/api/tags");
+            if let Ok(resp) = agent.get(&tags_url).call() {
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    let models: Vec<String> = v
+                        .get("models")
+                        .and_then(|m| m.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    return (true, models, "Ollama".into());
+                }
+            }
+            return (false, vec![], format!("Ollama 端點無回應：{}", tags_url));
+        }
+
+        // 嘗試 OpenAI-compatible
+        let base = url
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches("/generate")
+            .trim_end_matches("/v1");
+        let models_url = format!("{}/v1/models", base);
+        let mut req = agent.get(&models_url);
+        if let Some(key) = api_key {
+            req = req.set("Authorization", &format!("Bearer {}", key));
+        }
+        match req.call() {
+            Ok(resp) => {
+                if resp.status() == 401 {
+                    return (false, vec![], "API key 無效或過期（401 Unauthorized）".into());
+                }
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    let models: Vec<String> = v
+                        .get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|m| m.get("id").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                                .take(50)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    return (true, models, "OpenAI-compatible".into());
+                }
+                (true, vec![], "已連線（無法解析模型列表）".into())
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                let msg = match code {
+                    401 => "API key 無效或過期",
+                    403 => "API key 權限不足",
+                    404 => "端點不存在（404）",
+                    _ => &format!("HTTP {}", code),
+                };
+                (false, vec![], msg.to_string())
+            }
+            Err(_) => (false, vec![], format!("無法連線：{}", models_url)),
         }
     }
 
@@ -140,23 +258,23 @@ impl NlpEngine {
             "  Calling Ollama chunk {}/{} ({} words, model={}) …",
             chunk_index, total_chunks, word_count, self.model
         ));
-        let payload = json!({
-            "model":   self.model,
-            "prompt":  text,
-            "system":  self.system_prompt,
-            "stream":  true,
-            "options": {
-                "temperature": TEMPERATURE,
-                "num_predict": MAX_TOKENS,
-            }
-        });
+        let payload = self.build_request(text);
+        let request_url = if self.is_ollama() {
+            self.ollama_url.clone()
+        } else {
+            self.openai_chat_url()
+        };
 
         let mut last_err: Option<String> = None;
         for attempt in 1..=2 {
-            match self
+            let mut req = self
                 .agent
-                .post(&self.ollama_url)
-                .timeout(Duration::from_secs(600))
+                .post(&request_url)
+                .timeout(Duration::from_secs(600));
+            if let Some(key) = &self.api_key {
+                req = req.set("Authorization", &format!("Bearer {}", key));
+            }
+            match req
                 .send_json(serde_json::to_value(&payload).unwrap())
             {
                 Ok(resp) => {

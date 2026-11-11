@@ -26,8 +26,17 @@ struct Args {
     #[arg(long)]
     model: Option<String>,
 
-    /// Ollama endpoint URL (override with env OLLAMA_URL)
+    /// Inference API endpoint. Ollama (…/api/generate) by default; any
+    /// OpenAI-compatible URL also works (needs --api-key).
     #[arg(long)]
+    api_url: Option<String>,
+
+    /// Bearer token for OpenAI-compatible endpoints (not needed for Ollama)
+    #[arg(long)]
+    api_key: Option<String>,
+
+    /// Legacy alias for --api-url
+    #[arg(long, hide = true)]
     ollama_url: Option<String>,
 
     /// Essay language / grading rubric (override with env EAT_LANGUAGE)
@@ -70,6 +79,8 @@ fn main() {
         input_pdf: args.input_pdf,
         output: args.output,
         model: args.model,
+        api_url: args.api_url,
+        api_key: args.api_key,
         ollama_url: args.ollama_url,
         language: args.language,
         save_intermediate: args.save_intermediate,

@@ -42,6 +42,9 @@ pub struct PipelineOpts {
     pub input_pdf: Option<String>,
     pub output: Option<String>,
     pub model: Option<String>,
+    pub api_url: Option<String>,
+    /// Bearer token（OpenAI-compatible 端點用；本地 Ollama 免填）
+    pub api_key: Option<String>,
     pub ollama_url: Option<String>,
     pub language: Option<String>,
     pub save_intermediate: bool,
@@ -160,8 +163,13 @@ pub fn run_pipeline(args: &PipelineOpts) -> Result<String, PipelineError> {
                 .map_err(|e| PipelineError(e.to_string()))?;
             let img = Img::from_rgb(w as usize, h as usize, &rgb);
             let lines = if args.reader == "vlm" {
-                let url = args.ollama_url.clone().unwrap_or_else(default_ollama_url);
-                let vlm = eat_ocr::VlmReader::new(&vlm_model_name(args), &url);
+                let url = args
+                    .api_url
+                    .as_deref()
+                    .or(args.ollama_url.as_deref())
+                    .unwrap_or(&default_ollama_url())
+                    .to_string();
+                let vlm = eat_ocr::VlmReader::with_key(&vlm_model_name(args), &url, args.api_key.as_deref());
                 logging::info(&format!("  Page {}: VLM 行讀取（{}）…", i + 1, vlm_model_name(args)));
                 engine.run_with_reader(&img, &vlm).map_err(|e| PipelineError(e.to_string()))?
             } else {
@@ -216,9 +224,10 @@ pub fn run_pipeline(args: &PipelineOpts) -> Result<String, PipelineError> {
 
     // ── Step 2/3 — NLP ─────────────────────────────────────────────────────
     logging::info("━━━ Step 2/3 — Grammar Analysis (LLM) ━━━━━━━━━━━━━━━━━━━━━━");
-    let nlp = NlpEngine::new(
+    let nlp = NlpEngine::with_key(
         args.model.as_deref().unwrap_or(&default_model_name()),
-        args.ollama_url.as_deref().unwrap_or(&default_ollama_url()),
+        args.api_url.as_deref().or(args.ollama_url.as_deref()).unwrap_or(&default_ollama_url()),
+        args.api_key.as_deref(),
         args.language.as_deref().unwrap_or(&default_language()),
     );
     let t2 = Instant::now();

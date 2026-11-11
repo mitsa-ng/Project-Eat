@@ -87,17 +87,23 @@ pub struct VlmReader {
     agent: ureq::Agent,
     url: String,
     model: String,
+    api_key: Option<String>,
 }
 
 impl VlmReader {
     pub fn new(model: &str, ollama_url: &str) -> Self {
+        Self::with_key(model, ollama_url, None)
+    }
+
+    pub fn with_key(model: &str, url: &str, api_key: Option<&str>) -> Self {
         VlmReader {
             agent: ureq::AgentBuilder::new()
                 .timeout_connect(std::time::Duration::from_secs(30))
                 .timeout_read(std::time::Duration::from_secs(300))
                 .build(),
-            url: ollama_url.to_string(),
+            url: url.to_string(),
             model: model.to_string(),
+            api_key: api_key.map(|s| s.to_string()),
         }
     }
 
@@ -115,12 +121,14 @@ impl VlmReader {
             "stream": false,
             "options": {"temperature": 0, "num_predict": 200, "num_ctx": 2048}
         });
-        let resp = self
+        let mut req = self
             .agent
             .post(&self.url)
-            .timeout(std::time::Duration::from_secs(300))
-            .send_json(payload)
-            .ok()?;
+            .timeout(std::time::Duration::from_secs(300));
+        if let Some(key) = &self.api_key {
+            req = req.set("Authorization", &format!("Bearer {}", key));
+        }
+        let resp = req.send_json(payload).ok()?;
         let v: serde_json::Value = resp.into_json().ok()?;
         let text = v.get("response")?.as_str()?.trim().to_string();
         let lower = text.to_lowercase();
@@ -182,12 +190,14 @@ impl VlmReader {
             "stream": false,
             "options": {"temperature": 0, "num_predict": 4096, "num_ctx": 16384}
         });
-        let resp = self
+        let mut req = self
             .agent
             .post(&self.url)
-            .timeout(std::time::Duration::from_secs(900))
-            .send_json(payload)
-            .map_err(|e| format!("ollama: {}", e))?;
+            .timeout(std::time::Duration::from_secs(900));
+        if let Some(key) = &self.api_key {
+            req = req.set("Authorization", &format!("Bearer {}", key));
+        }
+        let resp = req.send_json(payload).map_err(|e| format!("ollama: {}", e))?;
         let v: serde_json::Value = resp.into_json().map_err(|e| format!("json: {}", e))?;
         let text = v
             .get("response")
