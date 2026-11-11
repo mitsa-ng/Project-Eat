@@ -738,10 +738,22 @@ impl eframe::App for EatGui {
                             if desc != d.desc {
                                 self.rubric_dims[i].desc = desc;
                             }
+                            if ui.button("✕ 刪除此維度").clicked() {
+                                self.rubric_dims.remove(i);
+                            }
                         });
                 }
-                let total: f32 = self.rubric_dims.iter().map(|d| d.max).sum();
-                ui.strong(format!("滿分 {:.0}", total));
+                ui.horizontal(|ui| {
+                    if ui.button("＋ 新增維度").clicked() {
+                        self.rubric_dims.push(eat_app::report::Dim {
+                            name: "新維度".into(),
+                            desc: String::new(),
+                            max: 5.0,
+                        });
+                    }
+                    let total: f32 = self.rubric_dims.iter().map(|d| d.max).sum();
+                    ui.strong(format!("滿分 {:.0}", total));
+                });
             });
 
             ui.add_space(8.0);

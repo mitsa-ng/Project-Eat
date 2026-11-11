@@ -375,7 +375,7 @@ pub fn run_batch(
                 .and_then(|t| serde_json::from_str(&t).ok())
                 .unwrap_or_default();
                 let language = o.language.clone().unwrap_or_else(|| "en".into());
-                let grade = if opts.score {
+                let grade = if opts.score && !opts.rubric.dims.is_empty() {
                     let text = pages
                         .iter()
                         .map(|w| eat_core::words::words_to_text(w, &language))
