@@ -70,6 +70,8 @@ struct EatGui {
     pull_running: Arc<AtomicBool>,
     install: Arc<Mutex<InstallState>>,
     live: LiveState,
+    browse_mode: bool,
+    browse: BrowseState,
 }
 
 /// 即時模式（live camera）狀態：worker 執行緒 ⇄ UI 的通道。
@@ -100,7 +102,7 @@ impl EatGui {
         install_cjk_font(&cc.egui_ctx);
         let state = Arc::new(Mutex::new(BatchState::default()));
         install_log_sink(state.clone());
-        let gui = EatGui {
+        let mut gui = EatGui {
             input_folder: String::new(),
             zip_out: String::new(),
             model: default_model_name(),
@@ -116,8 +118,20 @@ impl EatGui {
             pull_running: Arc::new(AtomicBool::new(false)),
             install: Arc::new(Mutex::new(InstallState::Idle)),
             live: LiveState::new(),
+            browse_mode: false,
+            browse: BrowseState::default(),
         };
         gui.spawn_ollama_check();
+        // 開發/展示用：~/eat-browse-folder.txt 存在 → 直接進瀏覽模式
+        if let Ok(folder) = std::fs::read_to_string(
+            std::env::var("HOME").unwrap_or_default() + "/eat-browse-folder.txt",
+        ) {
+            let folder = folder.trim().to_string();
+            if !folder.is_empty() {
+                gui.browse_mode = true;
+                gui.browse.load_folder(&folder);
+            }
+        }
         gui
     }
 }
@@ -566,12 +580,118 @@ fn serde_json_parse_models(body: &str) -> Vec<String> {
     out
 }
 
+
+impl EatGui {
+    fn browse_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // 鍵盤：←→ 切換（文字輸入框聚焦時不攔）
+        if !ctx.wants_keyboard_input() {
+            let left = ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let right = ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            if right && self.browse.index + 1 < self.browse.entries.len() {
+                self.browse.index += 1;
+                self.browse.reload_current();
+            }
+            if left && self.browse.index > 0 {
+                self.browse.index -= 1;
+                self.browse.reload_current();
+            }
+        }
+
+        // 頂列：資料夾＋導覽
+        ui.horizontal(|ui| {
+            ui.label("結果資料夾");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.browse.folder).desired_width(ui.available_width() - 260.0),
+            );
+            if ui.button("瀏覽…").clicked() {
+                if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                    self.browse.load_folder(&p.to_string_lossy());
+                }
+            }
+            if ui.button("↻ 重新載入").clicked() {
+                let f = self.browse.folder.clone();
+                if !f.is_empty() {
+                    self.browse.load_folder(&f);
+                }
+            }
+        });
+        if self.browse.entries.is_empty() {
+            if !self.browse.folder.is_empty() {
+                ui.label(format!("{}：沒找到標註 PDF（*.annotated.pdf / *_annotated.pdf）", self.browse.folder));
+            }
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            ui.strong(format!("{}/{}", self.browse.index + 1, self.browse.entries.len()));
+            ui.label(&self.browse.entries[self.browse.index].stem);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak("← 上一篇｜下一篇 →");
+                if ui.button("▶").clicked() && self.browse.index + 1 < self.browse.entries.len() {
+                    self.browse.index += 1;
+                    self.browse.reload_current();
+                }
+                if ui.button("◀").clicked() && self.browse.index > 0 {
+                    self.browse.index -= 1;
+                    self.browse.reload_current();
+                }
+            });
+        });
+        ui.separator();
+
+        // 右側：錯誤條列（依序）
+        egui::SidePanel::right("err-list")
+            .resizable(true)
+            .default_width(320.0)
+            .show_inside(ui, |ui| {
+                ui.strong(format!("錯誤（{}）", self.browse.err_list.len()));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, e) in self.browse.err_list.iter().enumerate() {
+                        let (label, color) = match e.kind.as_str() {
+                            "spelling" => ("拼字", egui::Color32::from_rgb(0xC6, 0x28, 0x28)),
+                            "grammar" => ("文法", egui::Color32::from_rgb(0xEF, 0x6C, 0x00)),
+                            _ => ("語意", egui::Color32::from_rgb(0x15, 0x65, 0xC0)),
+                        };
+                        ui.group(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.colored_label(color, format!("{}.", i + 1));
+                                ui.colored_label(color, label);
+                            });
+                            ui.label(format!("✗ {}", e.original));
+                            ui.label(format!("→ {}", e.suggestion));
+                        });
+                    }
+                    if self.browse.err_list.is_empty() {
+                        ui.label("（沒有偵測到錯誤，或找不到對應 _errors.json）");
+                    }
+                });
+            });
+
+        // 左側：標註原稿
+        self.browse.render_page(ui);
+    }
+}
+
 impl eframe::App for EatGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(6.0);
-            ui.heading("AI 作文批改 AI Essay Corrector");
-            ui.label("選一個資料夾（內含學生作文 PDF）→ 批次批改 → 打包成 ZIP");
+            ui.horizontal(|ui| {
+                ui.heading("AI 作文批改");
+                ui.separator();
+                if ui.selectable_label(!self.browse_mode, "批次批改").clicked() {
+                    self.browse_mode = false;
+                }
+                if ui.selectable_label(self.browse_mode, "瀏覽批改").clicked() {
+                    self.browse_mode = true;
+                }
+            });
+            if !self.browse_mode {
+                ui.label("選一個資料夾（內含學生作文 PDF）→ 批次批改 → 打包成 ZIP");
+            } else {
+                ui.label("選批次輸出的資料夾：左＝標註原稿、右＝錯誤條列；←→ 切換上一篇/下一篇");
+            }
             ui.add_space(4.0);
         });
 
@@ -630,6 +750,10 @@ impl eframe::App for EatGui {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.browse_mode {
+                self.browse_view(ui, ctx);
+                return;
+            }
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -901,6 +1025,152 @@ fn models_available(ollama: &Arc<Mutex<Option<OllamaStatus>>>) -> Vec<String> {
     match &*ollama.lock().unwrap() {
         Some(OllamaStatus::Reachable(m)) => m.clone(),
         _ => Vec::new(),
+    }
+}
+
+// ── 瀏覽批改模式 ─────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct BrowseEntry {
+    /// 顯示名（去掉 .annotated.pdf/_annotated.pdf）
+    stem: String,
+    pdf: std::path::PathBuf,
+    errors: Option<std::path::PathBuf>,
+}
+
+struct BrowseState {
+    folder: String,
+    entries: Vec<BrowseEntry>,
+    index: usize,
+    texture: Option<egui::TextureHandle>,
+    texture_key: String,
+    err_list: Vec<eat_core::nlp::EatError>,
+}
+
+impl Default for BrowseState {
+    fn default() -> Self {
+        BrowseState {
+            folder: String::new(),
+            entries: Vec::new(),
+            index: 0,
+            texture: None,
+            texture_key: String::new(),
+            err_list: Vec::new(),
+        }
+    }
+}
+
+impl BrowseState {
+    /// 掃資料夾組配（標註 PDF ↔ 錯誤 JSON）。兩種命名都支援：
+    /// X.annotated.pdf / X_annotated.pdf ↔ X_errors.json
+    fn load_folder(&mut self, folder: &str) {
+        self.folder = folder.to_string();
+        self.entries.clear();
+        self.index = 0;
+        self.texture = None;
+        self.texture_key.clear();
+        self.err_list.clear();
+        let mut pairs: Vec<BrowseEntry> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(folder) {
+            let mut pdfs: Vec<std::path::PathBuf> = rd
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    n.ends_with(".annotated.pdf") || n.ends_with("_annotated.pdf")
+                })
+                .collect();
+            pdfs.sort();
+            for pdf in pdfs {
+                let fname = pdf.file_name().unwrap().to_string_lossy().into_owned();
+                let stem = fname
+                    .trim_end_matches(".annotated.pdf")
+                    .trim_end_matches("_annotated.pdf")
+                    .to_string();
+                let dir = pdf.parent().unwrap();
+                let mut errors = dir.join(format!("{}_errors.json", stem));
+                if !errors.exists() {
+                    errors = dir.join(format!("{}_annotated_errors.json", stem));
+                }
+                let errors = if errors.exists() { Some(errors) } else { None };
+                pairs.push(BrowseEntry { stem, pdf, errors });
+            }
+        }
+        self.entries = pairs;
+        self.reload_current();
+    }
+
+    fn reload_current(&mut self) {
+        self.texture = None;
+        self.texture_key.clear();
+        self.err_list.clear();
+        if let Some(e) = self.entries.get(self.index) {
+            if let Some(p) = &e.errors {
+                if let Ok(txt) = std::fs::read_to_string(p) {
+                    self.err_list = serde_json::from_str(&txt).unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    fn render_page(&mut self, ui: &mut egui::Ui) {
+        let entry = match self.entries.get(self.index) {
+            Some(e) => e.clone(),
+            None => {
+                ui.centered_and_justified(|ui| ui.label("資料夾中沒有標註 PDF（先跑批次批改）"));
+                return;
+            }
+        };
+        let key = entry.pdf.to_string_lossy().into_owned();
+        if self.texture_key != key {
+            match eat_app::shared_pdf() {
+                Ok(pdf) => {
+                    // 全部頁面垂直串接（作文多為一頁）
+                    let count = 4usize; // 上限掃 4 頁
+                    let mut imgs: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+                    for i in 0..count {
+                        match pdf.render_page_rgb(&key, i as i32, 110.0) {
+                            Ok((w, h, rgb)) => imgs.push((w, h, rgb)),
+                            Err(_) => break,
+                        }
+                    }
+                    if !imgs.is_empty() {
+                        let total_w = imgs.iter().map(|(w, _, _)| *w).max().unwrap();
+                        let total_h: u32 = imgs.iter().map(|(_, h, _)| *h).sum::<u32>() + imgs.len() as u32 * 4;
+                        let mut canvas = vec![255u8; (total_w * total_h * 3) as usize];
+                        let mut y: u32 = 0;
+                        for (w, h, rgb) in &imgs {
+                            for row in 0..*h {
+                                let dst = ((y + row) * total_w) as usize * 3;
+                                let src = (row * w) as usize * 3;
+                                canvas[dst..dst + (*w as usize * 3)]
+                                    .copy_from_slice(&rgb[src..src + (*w as usize * 3)]);
+                            }
+                            y += h + 4;
+                        }
+                        let mut rgba = Vec::with_capacity((total_w * total_h * 4) as usize);
+                        for px in canvas.chunks_exact(3) {
+                            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                        }
+                        let img = egui::ColorImage::from_rgba_unmultiplied(
+                            [total_w as usize, total_h as usize],
+                            &rgba,
+                        );
+                        self.texture = Some(ui.ctx().load_texture("browse-page", img, egui::TextureOptions::LINEAR));
+                        self.texture_key = key;
+                    }
+                }
+                Err(e) => {
+                    ui.label(format!("pdfium 錯誤：{}", e.0));
+                }
+            }
+        }
+        if let Some(tex) = &self.texture {
+            let avail = ui.available_width();
+            let aspect = tex.size_vec2().y / tex.size_vec2().x.max(1.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.image((tex.id(), egui::vec2(avail, avail * aspect)));
+            });
+        }
     }
 }
 

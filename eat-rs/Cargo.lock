@@ -1185,6 +1185,7 @@ dependencies = [
  "eat-app",
  "eat-core",
  "eat-ocr",
+ "eat-pdf",
  "eframe",
  "image",
  "nokhwa",
